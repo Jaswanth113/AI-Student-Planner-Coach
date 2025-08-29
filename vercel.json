@@ -1,0 +1,32 @@
+{
+  "headers": [
+    {
+      "source": "/api/(.*)",
+      "headers": [
+        {
+          "key": "Access-Control-Allow-Origin",
+          "value": "*"
+        },
+        {
+          "key": "Access-Control-Allow-Methods",
+          "value": "GET, POST, PUT, DELETE, OPTIONS"
+        },
+        {
+          "key": "Access-Control-Allow-Headers",
+          "value": "Content-Type, Authorization"
+        }
+      ]
+    }
+  ],
+  "crons": [
+    {
+      "path": "/api/deadline-nudges",
+      "schedule": "0 * * * *"
+    }
+  ],
+  "functions": {
+    "api/agent.ts": {
+      "maxDuration": 30
+    }
+  }
+}
