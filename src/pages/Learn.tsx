@@ -9,16 +9,38 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '.
 import { useToast } from '../hooks/use-toast';
 import { useAgent } from '../hooks/useAgent'; // Import useAgent
 import { supabase } from '../integrations/supabase/client'; // Import the shared client
-import { BookOpen, Calendar, Target, Clock, Brain, CheckSquare, TrendingUp, Award } from 'lucide-react';
+import { BookOpen, Calendar, Target, Clock, Brain, CheckSquare, TrendingUp, Award, Trash2, AlertTriangle } from 'lucide-react';
 import { Badge } from '../components/ui/badge';
 import { Progress } from '../components/ui/progress';
 import { useData } from '../contexts/DataContext';
+
+interface MilestoneTask {
+  id?: string;
+  title?: string;
+  description?: string;
+  completed?: boolean;
+  due_date?: string;
+}
+
+interface Milestone {
+  week: number;
+  title: string;
+  description?: string;
+  topics_covered?: string[];
+  tasks?: string[];
+  learning_objectives?: string[];
+  resources?: string[];
+  estimated_hours?: number;
+  [key: string]: any; // For any additional properties
+}
+
+type MilestoneType = string | Milestone;
 
 interface LearningPlan {
   id: string;
   topic: string;
   duration_months: number;
-  weekly_milestones: string[];
+  weekly_milestones: MilestoneType[];
   created_at: string;
 }
 
@@ -29,26 +51,49 @@ export default function Learn() {
   const [duration, setDuration] = useState('1');
   const [loading, setLoading] = useState(false); // Keep local loading for form submission
   const [learningPlans, setLearningPlans] = useState<LearningPlan[]>([]);
+  const [planToDelete, setPlanToDelete] = useState<LearningPlan | null>(null);
+  const [isDeleting, setIsDeleting] = useState(false);
   const { sendMessageToAgent, loading: agentLoading } = useAgent(); // Use useAgent hook
   // Removed local conversationHistory state as it's managed by useAgent
 
   const fetchLearningPlans = async () => {
     if (!user) return;
-    const { data, error } = await supabase
-      .from('learning_plans')
-      .select('*')
-      .eq('user_id', user.id)
-      .order('created_at', { ascending: false });
+    
+    try {
+      setLoading(true);
+      const { data, error } = await supabase
+        .from('learning_plans')
+        .select('*')
+        .eq('user_id', user.id)
+        .order('created_at', { ascending: false });
 
-    if (error) {
+      if (error) throw error;
+      
+      // Ensure we have unique plans and valid data
+      const uniquePlans = data.reduce((acc: any[], plan) => {
+        // Skip if plan ID already exists
+        if (acc.some(p => p.id === plan.id)) return acc;
+        
+        // Ensure weekly_milestones is an array
+        acc.push({
+          ...plan,
+          weekly_milestones: Array.isArray(plan.weekly_milestones) 
+            ? plan.weekly_milestones 
+            : []
+        });
+        return acc;
+      }, []);
+      
+      setLearningPlans(uniquePlans as LearningPlan[]);
+    } catch (error) {
       console.error('Error fetching learning plans:', error);
       toast({
         title: 'Error',
-        description: 'Failed to fetch learning plans.',
+        description: 'Failed to fetch learning plans. Please try again.',
         variant: 'destructive',
       });
-    } else {
-      setLearningPlans(data as LearningPlan[]);
+    } finally {
+      setLoading(false);
     }
   };
 
@@ -67,55 +112,68 @@ export default function Learn() {
       return;
     }
 
-    setLoading(true); // Keep local loading for form submission
-    const userMessageContent = `Generate a plan for "${topic}" in ${duration} months`;
+    // Check for duplicates with a more specific check
+    const normalizedTopic = topic.trim().toLowerCase();
+    const isDuplicate = learningPlans.some(plan => 
+      plan.topic.trim().toLowerCase() === normalizedTopic
+    );
 
+    if (isDuplicate) {
+      toast({
+        title: 'Duplicate Topic',
+        description: 'A learning plan with this exact topic already exists.',
+        variant: 'destructive',
+      });
+      return;
+    }
+
+    setLoading(true);
+    
     try {
-      const result = await sendMessageToAgent(userMessageContent); // Use sendMessageToAgent
+      // Directly call the backend API to generate the learning plan
+      const response = await fetch('/api/agent', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({
+          userInput: `Create a detailed learning plan for ${topic} over ${duration} months`,
+          userId: user.id,
+          plan_details: {
+            topic: topic,
+            duration_months: parseInt(duration),
+            duration_text: `${duration} month${parseInt(duration) > 1 ? 's' : ''}`
+          }
+        })
+      });
+
+      if (!response.ok) {
+        const errorData = await response.json();
+        throw new Error(errorData.detail || 'Failed to generate learning plan');
+      }
+
+      const result = await response.json();
 
       if (result.type === 'error') {
-        throw new Error(result.detail || result.message || result.error || 'An unknown error occurred.');
+        throw new Error(result.detail || result.message || 'Failed to generate learning plan');
       }
 
-      if (result.type === 'plan_created' && result.plan) {
-        toast({
-          title: 'Success',
-          description: result.message || 'Learning plan generated!',
-        });
-
-        // Save the generated plan to Supabase
-        const { error: insertError } = await supabase.from('learning_plans').insert({
-          user_id: user.id,
-          topic: result.plan.topic, // Use topic from agent response
-          duration_months: parseInt(duration), // Duration is still from local state
-          weekly_milestones: result.plan.weekly_milestones,
-        });
-
-        if (insertError) {
-          console.error('Error saving learning plan:', insertError);
-          toast({
-            title: 'Error',
-            description: 'Failed to save learning plan.',
-            variant: 'destructive',
-          });
-        } else {
-          setTopic('');
-          setDuration('1');
-          fetchLearningPlans(); // Refresh the list of plans
-        }
-      } else {
-        const errorMessage = result.message || result.text || 'Failed to generate learning plan.';
-        toast({
-          title: 'Error',
-          description: errorMessage,
-          variant: 'destructive',
-        });
-      }
+      // Refresh the list of plans
+      await fetchLearningPlans();
+      
+      toast({
+        title: 'Success!',
+        description: 'Your learning plan has been created successfully.',
+      });
+      
+      setTopic('');
+      setDuration('1');
+      
     } catch (error: any) {
-      console.error('Error calling AI agent:', error);
+      console.error('Error creating learning plan:', error);
       toast({
         title: 'Error',
-        description: error.message || 'An unexpected error occurred.',
+        description: error.message || 'Failed to create learning plan. Please try again.',
         variant: 'destructive',
       });
     } finally {
@@ -125,15 +183,19 @@ export default function Learn() {
 
   // Check for duplicate topics to prevent multiple plans for the same subject
   const hasDuplicateTopic = (newTopic: string) => {
-    return learningPlans.some(plan => 
-      plan.topic.toLowerCase().includes(newTopic.toLowerCase()) || 
-      newTopic.toLowerCase().includes(plan.topic.toLowerCase())
-    );
+    if (!newTopic.trim() || !learningPlans.length) return false;
+    
+    const normalizedNewTopic = newTopic.toLowerCase().trim();
+    return learningPlans.some(plan => {
+      const normalizedPlanTopic = plan.topic.toLowerCase().trim();
+      // Only check for exact matches to prevent false positives
+      return normalizedPlanTopic === normalizedNewTopic;
+    });
   };
 
   const { tasks, addTask } = useData();
   
-  // Function to convert plan milestones to tasks
+  // Function to extend a learning plan milestones to tasks
   const convertToTasks = async (plan: LearningPlan) => {
     const tasksCreated = [];
     const startDate = new Date();
@@ -143,11 +205,27 @@ export default function Learn() {
       const dueDate = new Date(startDate);
       dueDate.setDate(startDate.getDate() + (i + 1) * 7); // Each milestone is due a week later
       
+      // Ensure milestone is always treated as a Milestone object for consistent access
+      const milestoneObj: Milestone = typeof milestone === 'string' 
+        ? { 
+            week: i + 1, 
+            title: milestone, 
+            description: `Learning milestone for ${plan.topic} - Week ${i + 1}`,
+            tasks: [],
+            learning_objectives: [],
+            resources: [],
+            estimated_hours: 0
+          } 
+        : milestone;
+
       const taskData = {
-        title: `${plan.topic}: ${milestone}`,
-        description: `Learning milestone for ${plan.topic} - Week ${i + 1}`,
+        title: `${plan.topic}: ${milestoneObj.title}`,
+        description: milestoneObj.description,
         priority: 2 as const,
-        estimate: 120, // 2 hours estimate for learning tasks
+        // If estimated_hours is available, distribute it among tasks, otherwise default to 2 hours per task
+        estimate: milestoneObj.estimated_hours && milestoneObj.tasks && milestoneObj.tasks.length > 0
+          ? Math.round((milestoneObj.estimated_hours * 60) / milestoneObj.tasks.length)
+          : 120, 
         due_date: dueDate.toISOString(),
         due_date_local: dueDate.toISOString(),
         tags: ['learning', plan.topic.toLowerCase().replace(/\s+/g, '-')],
@@ -168,6 +246,124 @@ export default function Learn() {
       title: 'Tasks Created!',
       description: `Created ${tasksCreated.length} learning tasks for ${plan.topic}`,
     });
+  };
+
+  // Function to confirm and delete a learning plan
+  const confirmDeletePlan = (plan: LearningPlan) => {
+    setPlanToDelete(plan);
+  };
+
+  // Function to delete a learning plan
+  const deletePlan = async () => {
+    if (!user || !planToDelete) return;
+
+    setIsDeleting(true);
+    try {
+      const { error } = await supabase
+        .from('learning_plans')
+        .delete()
+        .eq('id', planToDelete.id)
+        .eq('user_id', user.id);
+
+      if (error) throw error;
+
+      toast({
+        title: 'Success',
+        description: `"${planToDelete.topic}" has been deleted.`,
+      });
+
+      // Refresh the list of plans and close the dialog
+      await fetchLearningPlans();
+      setPlanToDelete(null);
+    } catch (error) {
+      console.error('Error deleting learning plan:', error);
+      toast({
+        title: 'Error',
+        description: 'Failed to delete learning plan. Please try again.',
+        variant: 'destructive',
+      });
+    } finally {
+      setIsDeleting(false);
+    }
+  };
+
+  // Function to extend a learning plan with additional weeks
+  const extendPlan = async (planId: string) => {
+    if (!user) {
+      toast({
+        title: 'Authentication Required',
+        description: 'Please sign in to extend a learning plan.',
+        variant: 'destructive',
+      });
+      return;
+    }
+    
+    try {
+      setLoading(true);
+      
+      // Show loading toast
+      const loadingToast = toast({
+        title: 'Extending Learning Plan',
+        description: 'Adding more weeks to your learning plan...',
+        variant: 'default',
+      });
+      
+      // Call the API to extend the learning plan
+      const response = await fetch('/api/extend-learning-plan', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'user-id': user.id,
+        },
+        body: JSON.stringify({
+          plan_id: planId,
+          additional_weeks: 4, // Default to extending by 4 weeks
+        }),
+      });
+
+      // Parse the response
+      const result = await response.json();
+      
+      // Dismiss the loading toast
+      loadingToast.dismiss();
+
+      if (!response.ok) {
+        throw new Error(result.detail || result.error || 'Failed to extend learning plan');
+      }
+
+      // Show success message
+      toast({
+        title: 'Success!',
+        description: `Successfully extended learning plan with ${result.new_weeks_added} additional weeks. Total weeks: ${result.total_weeks}`,
+        variant: 'default',
+      });
+
+      // Refresh the list of plans to show the updated version
+      await fetchLearningPlans();
+      
+      // Log the successful extension
+      console.log(`Extended learning plan ${planId} with ${result.new_weeks_added} weeks`);
+      
+    } catch (error: any) {
+      console.error('Error extending learning plan:', error);
+      
+      // Show error toast with details
+      toast({
+        title: 'Error',
+        description: error.message || 'An error occurred while extending the learning plan. Please try again.',
+        variant: 'destructive',
+      });
+      
+      // Log detailed error for debugging
+      console.error('Error details:', {
+        planId,
+        error: error.message,
+        stack: error.stack,
+      });
+      
+    } finally {
+      setLoading(false);
+    }
   };
 
   return (
@@ -370,32 +566,80 @@ export default function Learn() {
                           <span>Started {new Date(plan.created_at).toLocaleDateString()}</span>
                         </div>
                         <div className="flex items-center gap-1">
-                          <CheckSquare className="w-4 h-4" />
+                          <TrendingUp className="w-4 h-4" />
                           <span>{completedTasks} tasks completed</span>
                         </div>
                       </div>
-                      <Button 
-                        variant="outline" 
-                        size="sm"
-                        onClick={() => convertToTasks(plan)}
-                        className="gap-2"
-                      >
-                        <Target className="w-4 h-4" />
-                        Create Tasks
-                      </Button>
+                      <div className="flex gap-2">
+                        <Button 
+                          variant="outline" 
+                          size="sm"
+                          onClick={() => convertToTasks(plan)}
+                          className="gap-1"
+                        >
+                          <Target className="w-4 h-4" />
+                          Create Tasks
+                        </Button>
+                        <Button 
+                          variant="outline" 
+                          size="sm"
+                          onClick={() => extendPlan(plan.id)}
+                          disabled={loading}
+                          className="gap-1 bg-indigo-50 hover:bg-indigo-100 text-indigo-700 border-indigo-200"
+                        >
+                          {loading ? (
+                            <>
+                              <div className="animate-spin rounded-full h-3 w-3 border-b-2 border-indigo-600 mr-1"></div>
+                              Extending...
+                            </>
+                          ) : (
+                            <>
+                              <Clock className="w-4 h-4" />
+                              Extend
+                            </>
+                          )}
+                        </Button>
+                        <Button 
+                          variant="ghost" 
+                          size="sm"
+                          onClick={() => confirmDeletePlan(plan)}
+                          className="text-red-600 hover:bg-red-50 hover:text-red-700"
+                          title="Delete Plan"
+                          disabled={isDeleting}
+                        >
+                          {isDeleting ? (
+                            <div className="animate-spin rounded-full h-3 w-3 border-b-2 border-red-600 mr-1"></div>
+                          ) : (
+                            <Trash2 className="w-4 h-4" />
+                          )}
+                        </Button>
+                      </div>
                     </div>
 
-                    <Accordion type="single" collapsible>
+                    <Accordion type="single" collapsible className="mt-4">
                       <AccordionItem value={plan.id} className="border-none">
                         <AccordionTrigger className="hover:no-underline py-2">
                           <span className="font-semibold text-left">View Weekly Milestones ({plan.weekly_milestones.length})</span>
                         </AccordionTrigger>
                         <AccordionContent className="pt-4">
                           <div className="space-y-3">
-                            {plan.weekly_milestones.map((milestone, index) => {
+                            {plan.weekly_milestones.map((milestone: MilestoneType, index: number) => {
                               const isCurrentWeek = index === weeksPassed;
                               const isCompleted = index < weeksPassed;
                               const weekNumber = index + 1;
+                              
+                              // Handle both string and object milestone formats
+                              const milestoneTitle = typeof milestone === 'string' 
+                                ? milestone 
+                                : milestone.title || `Week ${milestone.week || weekNumber}`;
+                              
+                              const milestoneDescription = typeof milestone === 'object' 
+                                ? milestone.description 
+                                : '';
+                              
+                              const milestoneTasks = typeof milestone === 'object' 
+                                ? milestone.tasks 
+                                : [];
                               
                               return (
                                 <div 
@@ -420,15 +664,124 @@ export default function Learn() {
                                         {isCompleted && <CheckSquare className="w-4 h-4 text-green-600" />}
                                         {isCurrentWeek && <Clock className="w-4 h-4 text-indigo-600" />}
                                       </div>
-                                      <p className={`text-sm ${
-                                        isCurrentWeek 
-                                          ? 'text-indigo-800 font-medium' 
-                                          : isCompleted 
-                                            ? 'text-green-800' 
-                                            : 'text-gray-700'
-                                      }`}>
-                                        {milestone}
-                                      </p>
+                                      
+                                      <h4 className="font-medium text-base mb-1">{milestoneTitle}</h4>
+                                      
+                                      {milestoneDescription && (
+                                        <p className="text-sm text-gray-700 mb-2">{milestoneDescription}</p>
+                                      )}
+
+                                      {typeof milestone === 'object' && milestone.topics_covered && milestone.topics_covered.length > 0 && (
+                                        <div className="mt-3 mb-3">
+                                          <p className="text-xs font-medium text-gray-500 mb-2">Topics Covered:</p>
+                                          <div className="flex flex-wrap gap-2">
+                                            {milestone.topics_covered.map((topic: string, idx: number) => (
+                                              <Badge key={idx} variant="secondary" className="text-xs">
+                                                {topic}
+                                              </Badge>
+                                            ))}
+                                          </div>
+                                        </div>
+                                      )}
+
+                                      {typeof milestone === 'object' && milestone.learning_objectives && milestone.learning_objectives.length > 0 && (
+                                        <div className="mt-3 mb-3">
+                                          <p className="text-xs font-medium text-gray-500 mb-1">Learning Objectives:</p>
+                                          <ul className="space-y-1 text-sm">
+                                            {milestone.learning_objectives.map((objective: string, idx: number) => (
+                                              <li key={idx} className="flex items-start">
+                                                <span className="text-green-500 mr-2">✓</span>
+                                                <span>{objective}</span>
+                                              </li>
+                                            ))}
+                                          </ul>
+                                        </div>
+                                      )}
+                                      
+                                      {milestoneTasks.length > 0 && (
+                                        <div className="mt-4 mb-4">
+                                          <p className="text-xs font-medium text-gray-500 mb-2">This Week's Tasks:</p>
+                                          <ul className="space-y-3">
+                                            {milestoneTasks.map((task: string, taskIndex: number) => {
+                                              // Extract time estimate if present in the task string
+                                              const timeMatch = task.match(/\((\d+h?\s*\d*m?)\)/);
+                                              const timeEstimate = timeMatch ? timeMatch[1] : null;
+                                              const taskText = timeMatch ? task.replace(/\(\d+h?\s*\d*m?\)/, '').trim() : task;
+                                              
+                                              return (
+                                                <li key={taskIndex} className="flex items-start p-3 bg-white rounded-lg border border-gray-100 shadow-sm hover:shadow-md transition-shadow">
+                                                  <span className="flex-shrink-0 w-5 h-5 mt-0.5 mr-3 border border-gray-300 rounded flex items-center justify-center group">
+                                                    <input 
+                                                      type="checkbox" 
+                                                      className="form-checkbox h-3.5 w-3.5 text-indigo-600 rounded focus:ring-2 focus:ring-indigo-500"
+                                                      onChange={() => {}} // Add task completion logic here
+                                                    />
+                                                  </span>
+                                                  <div className="flex-1">
+                                                    <div className="flex items-start justify-between">
+                                                      <span className="text-sm font-medium text-gray-800">{taskText}</span>
+                                                      {timeEstimate && (
+                                                        <span className="text-xs bg-blue-50 text-blue-700 px-2 py-0.5 rounded-full ml-2 whitespace-nowrap">
+                                                          {timeEstimate}
+                                                        </span>
+                                                      )}
+                                                    </div>
+                                                    
+                                                    {/* Add subtasks or additional details here if needed */}
+                                                  </div>
+                                                </li>
+                                              );
+                                            })}
+                                          </ul>
+                                          
+                                          {/* Estimated hours for the week */}
+                                          {typeof milestone === 'object' && milestone.estimated_hours && (
+                                            <div className="mt-3 flex items-center text-xs text-gray-500 bg-gray-50 p-2 rounded-lg">
+                                              <Clock className="w-3.5 h-3.5 mr-1.5 text-indigo-500" />
+                                              <span>Total estimated time this week: <span className="font-medium">{milestone.estimated_hours} hours</span></span>
+                                            </div>
+                                          )}
+                                        </div>
+                                      )}
+                                      
+                                      {/* Tips Section */}
+                                      {typeof milestone === 'object' && milestone.tips && milestone.tips.length > 0 && (
+                                        <div className="mt-4 p-3 bg-yellow-50 border-l-4 border-yellow-400 rounded-r">
+                                          <p className="text-xs font-medium text-yellow-800 mb-2 flex items-center">
+                                            <svg className="w-3.5 h-3.5 mr-1.5 text-yellow-500" fill="currentColor" viewBox="0 0 20 20" xmlns="http://www.w3.org/2000/svg">
+                                              <path fillRule="evenodd" d="M18 10a8 8 0 11-16 0 8 8 0 0116 0zm-7-4a1 1 0 11-2 0 1 1 0 012 0zM9 9a1 1 0 000 2v3a1 1 0 001 1h1a1 1 0 100-2v-3a1 1 0 00-1-1H9z" clipRule="evenodd"></path>
+                                            </svg>
+                                            Pro Tips & Best Practices
+                                          </p>
+                                          <ul className="space-y-1.5 text-sm text-yellow-700">
+                                            {milestone.tips.map((tip: string, tipIndex: number) => (
+                                              <li key={tipIndex} className="flex items-start">
+                                                <span className="mr-2">•</span>
+                                                <span>{tip}</span>
+                                              </li>
+                                            ))}
+                                          </ul>
+                                        </div>
+                                      )}
+
+                                      {typeof milestone === 'object' && milestone.resources && milestone.resources.length > 0 && (
+                                        <div className="mt-3">
+                                          <p className="text-xs font-medium text-gray-500 mb-1">Recommended Resources:</p>
+                                          <ul className="space-y-1 text-sm">
+                                            {milestone.resources.map((resource: string, idx: number) => (
+                                              <li key={idx} className="flex items-start">
+                                                <span className="text-blue-500 mr-2">🔗</span>
+                                                <a href="#" className="text-blue-600 hover:underline" onClick={(e) => {
+                                                  e.preventDefault();
+                                                  window.open(resource.includes('http') ? resource : `https://www.google.com/search?q=${encodeURIComponent(resource)}`, '_blank');
+                                                }}>
+                                                  {resource.length > 50 ? resource.substring(0, 50) + '...' : resource}
+                                                </a>
+                                              </li>
+                                            ))}
+                                          </ul>
+                                        </div>
+                                      )}
                                     </div>
                                   </div>
                                 </div>
@@ -445,6 +798,52 @@ export default function Learn() {
           </div>
         )}
       </div>
+
+      {/* Delete Confirmation Dialog */}
+      {planToDelete && (
+        <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50 p-4">
+          <div className="bg-white rounded-lg shadow-xl w-full max-w-md">
+            <div className="p-6">
+              <div className="flex items-center gap-3 mb-4">
+                <div className="p-2 bg-red-100 rounded-full">
+                  <AlertTriangle className="w-6 h-6 text-red-600" />
+                </div>
+                <h3 className="text-lg font-semibold">Delete Learning Plan</h3>
+              </div>
+              
+              <p className="text-gray-700 mb-6">
+                Are you sure you want to delete the learning plan "<span className="font-medium">{planToDelete.topic}</span>"? 
+                This action cannot be undone.
+              </p>
+              
+              <div className="flex justify-end gap-3">
+                <Button 
+                  variant="outline" 
+                  onClick={() => setPlanToDelete(null)}
+                  disabled={isDeleting}
+                >
+                  Cancel
+                </Button>
+                <Button 
+                  variant="destructive" 
+                  onClick={deletePlan}
+                  disabled={isDeleting}
+                  className="bg-red-600 hover:bg-red-700"
+                >
+                  {isDeleting ? (
+                    <>
+                      <div className="animate-spin rounded-full h-4 w-4 border-b-2 border-white mr-2"></div>
+                      Deleting...
+                    </>
+                  ) : (
+                    'Delete Plan'
+                  )}
+                </Button>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }

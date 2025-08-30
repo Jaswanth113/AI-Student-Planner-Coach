@@ -9,7 +9,7 @@ import { useCommitmentAI } from '@/hooks/useCommitmentAI';
 import { useCommitments } from '@/hooks/useSupabaseData';
 import { useToast } from '@/hooks/use-toast';
 import { Commitment } from '../../types/api';
-import { formatTime, formatDate } from '@/utils/commitmentAI';
+import { formatTime, formatDate } from '../utils/commitmentAI';
 
 interface SmartQuickAddProps {
   onCommitmentCreated?: (commitment: Commitment) => void;

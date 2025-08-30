@@ -16,7 +16,7 @@ import { Badge } from '@/components/ui/badge';
 import { Alert, AlertDescription } from '@/components/ui/alert';
 import { AICommitmentSuggestion } from '@/hooks/useCommitmentAI';
 import { SmartReminder } from '@/hooks/useSmartReminders';
-import { formatTime, formatDate } from '@/utils/commitmentAI';
+import { formatTime, formatDate } from '../utils/commitmentAI';
 
 interface AISuggestionsPanelProps {
   suggestions: AICommitmentSuggestion[];

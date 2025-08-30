@@ -4,9 +4,11 @@ import os
 import json
 import asyncio
 import httpx
+import re # Import re for regex parsing
 from typing import Dict, Any, Optional
 from fastapi import FastAPI, Request, HTTPException
 from fastapi.responses import JSONResponse
+from fastapi.middleware.cors import CORSMiddleware # Import CORSMiddleware
 from supabase import create_client, Client
 from langchain_groq import ChatGroq
 import pendulum
@@ -14,6 +16,23 @@ from dotenv import load_dotenv
 
 # --- Initialize FastAPI App ---
 app = FastAPI()
+
+# --- CORS Configuration ---
+origins = [
+    "http://localhost",
+    "http://localhost:8080", # Frontend running on 8080
+    "http://localhost:8081", # Frontend running on 8081 (if 8080 is in use)
+    "http://127.0.0.1:8080",
+    "http://127.0.0.1:8081",
+]
+
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=origins,
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
 
 # --- Global clients (initialized once for serverless efficiency) ---
 _llm: Optional[ChatGroq] = None
@@ -44,6 +63,9 @@ def get_clients():
                 status_code=500, 
                 detail=f"Server configuration error: Missing environment variables: {', '.join(missing_vars)}"
             )
+
+        print(f"DEBUG: Supabase URL: {supabase_url}")
+        print(f"DEBUG: Supabase Key (first 5 chars): {supabase_key[:5]}...") # Print partial key for security
 
         try:
             _llm = ChatGroq(api_key=groq_api_key, model="llama-3.1-8b-instant", temperature=0.2)
@@ -76,93 +98,183 @@ async def trigger_grocery_enrichment(grocery_item: Dict[str, Any]):
         print(f"Grocery enrichment failed (non-critical): {e}")
 
 # --- Helper function to generate detailed learning plan milestones ---
-async def generate_learning_milestones(llm: ChatGroq, topic: str, duration_text: str) -> list:
-    """Generate detailed weekly milestones for a learning plan"""
-    milestone_prompt = f"""
-You are an expert learning plan creator and educational consultant. Generate a comprehensive, week-by-week learning plan for the topic: "{topic}" over the duration: "{duration_text}".
-
-Create a progressive, practical learning journey that includes:
-- Clear learning objectives for each week
-- Specific, actionable tasks (4-6 per week)
-- Resources and materials needed
-- Practice exercises and assessments
-- Real-world applications where possible
-
-Ensure the plan is:
-✓ Structured from beginner to intermediate/advanced level
-✓ Includes both theoretical understanding and practical application
-✓ Has realistic time commitments for each task
-✓ Progressive difficulty that builds on previous weeks
-✓ Includes review and reinforcement activities
-
-Return ONLY a JSON array of weekly milestone objects in this exact format:
-[
-  {{
-    "week": 1,
-    "title": "Week 1: Foundation & Core Concepts",
-    "description": "Establish fundamental understanding of {topic} principles and key terminology. Set up learning environment and resources.",
-    "learning_objectives": ["Understand basic concepts", "Set up practice environment", "Identify key resources"],
-    "tasks": [
-      "Read introductory materials and take notes (2 hours)",
-      "Set up necessary tools/software for practice (1 hour)",
-      "Complete beginner exercises or tutorials (2-3 hours)",
-      "Join relevant community forums or study groups (30 min)",
-      "Create a glossary of key terms (1 hour)",
-      "Take a self-assessment quiz to identify strengths/gaps (30 min)"
-    ],
-    "resources": ["Recommended books/articles", "Online tutorials", "Practice platforms"],
-    "estimated_hours": 7
-  }},
-  {{
-    "week": 2,
-    "title": "Week 2: Building Practical Skills",
-    "description": "Apply foundational knowledge through hands-on practice and build core competencies.",
-    "learning_objectives": ["Apply basic concepts practically", "Develop core skills", "Build confidence through practice"],
-    "tasks": [
-      "Complete intermediate practice exercises (3 hours)",
-      "Work on your first small project (2-3 hours)",
-      "Review and reinforce Week 1 concepts (1 hour)",
-      "Seek feedback from community or mentor (1 hour)",
-      "Document your learning progress and challenges (30 min)"
-    ],
-    "resources": ["Practice datasets/materials", "Project templates", "Community feedback"],
-    "estimated_hours": 8
-  }}
-]
-
-Generate a complete learning plan covering the full duration specified. Make each week build logically on the previous one.
-"""
-    
+async def generate_learning_milestones(llm: ChatGroq, topic: str, duration_text: str, num_weeks: int) -> list:
+    """Generate detailed weekly milestones for a learning plan with AI assistance"""
     try:
-        milestone_response = await llm.ainvoke(milestone_prompt)
-        milestone_content = milestone_response.content.strip()
+        # First, generate a structured learning plan using AI
+        is_dsa = any(term in topic.lower() for term in ['data struct', 'dsa', 'algorithm'])
         
-        # Find and parse JSON from response
-        json_start = milestone_content.find('[')
-        if json_start == -1:
-            # Fallback to basic milestones if AI doesn't return proper format
-            return [
-                {
-                    "week": 1,
-                    "title": "Week 1: Getting Started",
-                    "description": f"Begin learning {topic}",
-                    "tasks": [f"Research {topic} basics", "Set up learning environment", "Create study schedule"]
-                }
-            ]
-        
-        milestone_json = milestone_content[json_start:]
-        return json.loads(milestone_json)
-    except Exception as e:
-        print(f"Milestone generation error: {e}")
-        # Return fallback milestones
-        return [
-            {
+        if is_dsa:
+            # DSA-specific prompt
+            prompt = f"""You are an expert computer science educator specializing in Data Structures and Algorithms (DSA). 
+            Create a comprehensive, week-by-week DSA mastery plan for "{topic}" over "{duration_text}". The plan MUST contain exactly {num_weeks} weeks.
+            
+            CRITICAL: You MUST return ONLY a valid JSON array. Do not include any text before or after the JSON.
+            
+            For each week, provide:
+            - `week`: The week number (integer).
+            - `title`: A concise title for the week's focus (string).
+            - `description`: A brief overview of what will be covered (string).
+            - `topics_covered`: A list of 3-5 specific topics to study (array of strings).
+            - `learning_objectives`: 3-5 specific, measurable learning goals for the week (array of strings).
+            - `tasks`: 3-5 actionable tasks to complete, including estimated time in parentheses (array of strings).
+            - `estimated_hours`: Total estimated learning hours for the week (integer).
+            - `tips`: 2-3 practical tips or best practices for the week (array of strings).
+            - `resources`: 2-3 recommended resources (array of strings).
+
+            Cover these core DSA areas progressively over {num_weeks} weeks:
+            1. Complexity Analysis & Big-O
+            2. Arrays & Strings
+            3. Linked Lists
+            4. Stacks & Queues
+            5. Recursion & Backtracking
+            6. Trees & Graphs
+            7. Sorting & Searching
+            8. Dynamic Programming
+            9. Greedy Algorithms
+            10. Advanced Topics (Tries, Segment Trees, etc.)
+            
+            Each week should include:
+            - Theoretical concepts
+            - Hands-on implementation
+            - Problem-solving practice
+            - Real-world applications
+            - Common interview questions
+            
+            Return ONLY the JSON array with no additional text, markdown formatting, or explanations.
+            """
+        else:
+            # General topic prompt
+            prompt = f"""You are an expert learning experience designer. 
+            Create a comprehensive, week-by-week learning plan for: {topic}
+            Duration: {duration_text}. The plan MUST contain exactly {num_weeks} weeks.
+            
+            CRITICAL: You MUST return ONLY a valid JSON array. Do not include any text before or after the JSON.
+            
+            For each week, include these sections:
+            - `week`: The week number (integer).
+            - `title`: A concise title for the week's focus (string).
+            - `description`: A brief overview of what will be covered (string).
+            - `topics_covered`: A list of 3-5 specific topics to study (array of strings).
+            - `learning_objectives`: 3-5 specific, measurable learning goals for the week (array of strings).
+            - `tasks`: 3-5 actionable tasks to complete, including estimated time in parentheses (array of strings).
+            - `estimated_hours`: Total estimated learning hours for the week (integer).
+            - `tips`: 2-3 practical tips or best practices for the week (array of strings).
+            - `resources`: 2-3 recommended resources (array of strings).
+
+            Return ONLY a JSON array of weekly milestone objects in this exact format:
+            [
+              {{
                 "week": 1,
-                "title": "Week 1: Getting Started",
-                "description": f"Begin learning {topic}",
-                "tasks": [f"Research {topic} basics", "Set up learning environment", "Create study schedule"]
-            }
-        ]
+                "title": "Week 1: Introduction and Fundamentals",
+                "description": "Understand fundamental concepts and terminology.",
+                "topics_covered": [
+                    "History of the topic",
+                    "Core concepts",
+                    "Key principles"
+                ],
+                "learning_objectives": [
+                  "Define core concepts.",
+                  "Explain key principles."
+                ],
+                "tasks": [
+                  "Read introductory material (2h)",
+                  "Complete basic exercises (1h)"
+                ],
+                "estimated_hours": 8,
+                "tips": [
+                  "Focus on understanding.",
+                  "Practice regularly."
+                ],
+                "resources": [
+                  "Introductory Book",
+                  "Online Tutorial"
+                ]
+              }}
+            ]
+
+            Make it practical, progressive, and achievable. Ensure each week has 3-5 specific tasks.
+            Return ONLY the JSON array with no additional text, markdown formatting, or explanations.
+            """
+            
+        print(f"DEBUG: Generating learning milestones for: {topic} ({duration_text})")
+        print(f"DEBUG: Prompt sent to AI:\n{prompt[:1000]}...") # Log first 1000 chars of prompt
+        
+        try:
+            # Try with the more powerful model first
+            try:
+                print("DEBUG: Attempting to generate with 70B model...")
+                response = await llm.ainvoke(prompt) # Use ainvoke directly with the prompt
+                print("DEBUG: Successfully generated with 70B model")
+            except Exception as e:
+                print(f"DEBUG: 70B model failed: {e}")
+                print("DEBUG: Falling back to 8B model...")
+                response = await llm.ainvoke(prompt, max_tokens=4000) # Use ainvoke directly with the prompt and max_tokens
+            
+            # Extract and clean the generated text
+            generated_text = response.content.strip() # Access .content for ainvoke
+            print(f"DEBUG: Raw AI response (first 500 chars):\n{generated_text[:500]}...")  # Log first 500 chars
+            
+            # Clean the response
+            cleaned_text = generated_text.strip()
+            
+            # Remove markdown code block markers if present
+            if cleaned_text.startswith('```json'):
+                cleaned_text = cleaned_text[7:]
+            elif cleaned_text.startswith('```'):
+                cleaned_text = cleaned_text[3:]
+            if cleaned_text.endswith('```'):
+                cleaned_text = cleaned_text[:-3]
+            cleaned_text = cleaned_text.strip()
+            
+            print(f"DEBUG: Cleaned AI response (first 500 chars):\n{cleaned_text[:500]}...")
+            
+            # Parse the JSON
+            try:
+                milestones = json.loads(cleaned_text)
+                
+                # Validate the structure
+                if not isinstance(milestones, list):
+                    raise ValueError("Expected a list of milestones")
+                    
+                print(f"DEBUG: Successfully parsed {len(milestones)} milestones")
+                print(f"DEBUG: First parsed milestone:\n{json.dumps(milestones[0], indent=2) if milestones else 'N/A'}")
+                
+                # Ensure all required fields are present and have the correct types
+                required_fields = {
+                    "week": int,
+                    "title": str,
+                    "description": str,
+                    "topics_covered": list,
+                    "learning_objectives": list,
+                    "tasks": list,
+                    "resources": list,
+                    "tips": list,
+                    "estimated_hours": (int, float)
+                }
+                
+                for i, milestone in enumerate(milestones):
+                    for field, field_type in required_fields.items():
+                        if field not in milestone:
+                            raise ValueError(f"Missing required field: {field} in milestone {i+1}")
+                        if not isinstance(milestone[field], field_type) and not (isinstance(field_type, tuple) and any(isinstance(milestone[field], t) for t in field_type)):
+                            raise ValueError(f"Invalid type for {field} in milestone {i+1}. Expected {field_type}, got {type(milestone[field])}")
+                
+                print("Successfully validated milestones")
+                return milestones
+                
+            except json.JSONDecodeError as e:
+                print(f"Failed to parse JSON: {e}")
+                print(f"Cleaned text that failed to parse: {cleaned_text[:500]}...")
+                raise ValueError(f"Failed to parse learning plan: {str(e)}")
+                
+        except Exception as e:
+            print(f"Error in generate_learning_milestones: {str(e)}")
+            raise Exception(f"Failed to generate learning plan: {str(e)}")
+            
+    except Exception as e:
+        print(f"Unexpected error in generate_learning_milestones: {str(e)}")
+        raise
 
 # --- Helper function to create tasks from learning plan ---
 async def create_first_week_tasks(supabase: Client, user_id: str, milestones: list) -> list:
@@ -216,6 +328,7 @@ async def handle_agent_request(request: Request):
         
         user_input = body.get("userInput")
         user_id = body.get("userId")
+        plan_details = body.get("plan_details")
 
         if not user_input or not user_id:
             raise HTTPException(status_code=400, detail="Missing userInput or userId.")
@@ -227,6 +340,17 @@ async def handle_agent_request(request: Request):
             raise  # Re-raise HTTP exceptions
         except Exception as e:
             raise HTTPException(status_code=500, detail=f"Client initialization failed: {str(e)}")
+
+        # --- Direct Intent Routing for Learning Plans ---
+        # If plan_details are provided directly, bypass the general intent detection
+        if plan_details and plan_details.get("topic"):
+            print("Directly routing to generate_learning_plan.")
+            # Construct the response as if the intent detector had run
+            parsed_response = {
+                "intent": "generate_learning_plan",
+                "plan_details": plan_details
+            }
+            return await handle_generate_learning_plan(llm, supabase, parsed_response, user_id)
 
         # Fetch comprehensive user context for personalization
         try:
@@ -260,7 +384,8 @@ async def handle_agent_request(request: Request):
         active_goal = body.get("activeGoal")
         explicit_intent = body.get("intent")
         
-        if explicit_intent == "generate_grocery_plan" and active_goal:
+        if explicit_intent == "generate_grocery_plan":
+            # Pass active_goal as None if not provided, allowing for goal-independent planning
             return await handle_generate_grocery_plan(llm, supabase, user_input, user_id, active_goal)
         
         # Construct the comprehensive AI prompt for all page contexts
@@ -303,7 +428,7 @@ Respond with ONE of these JSON formats based on intent:
 3. COMMITMENTS & SCHEDULE:
    {{ "intent": "create_item", "type": "commitment", "data": {{ 
        "title": "Event/Meeting title",
-       "type": "meeting/call/appointment/event/deadline/personal/class/hackathon/gym/social/exam",
+       "type": "class/hackathon/gym/social/exam (ONLY these 5 types are allowed)",
        "start_time": "2025-08-31T14:00:00",
        "end_time": "2025-08-31T15:00:00",
        "location": "if_mentioned",
@@ -364,19 +489,24 @@ Rules:
 
         # Make AI call with error handling
         try:
+            print(f"DEBUG: Sending system_prompt to AI (first 500 chars):\n{system_prompt[:500]}...")
             response = await llm.ainvoke(system_prompt)
             ai_content = response.content.strip()
+            print(f"DEBUG: Raw AI response from intent detection:\n{ai_content}")
             
             # Robustly extract JSON from AI response
             json_start = ai_content.find('{')
             if json_start == -1:
+                print("ERROR: AI response did not contain a starting '{' for JSON.")
                 raise ValueError("AI response did not contain valid JSON.")
             
             json_content = ai_content[json_start:]
             # Handle potential trailing text after JSON
             try:
                 parsed_response = json.loads(json_content)
-            except json.JSONDecodeError:
+            except json.JSONDecodeError as e:
+                print(f"ERROR: Initial JSON parse failed: {e}")
+                print(f"DEBUG: Attempting to recover JSON from: {json_content[:500]}...")
                 # Try to find the end of the JSON object
                 brace_count = 0
                 json_end = json_start
@@ -388,10 +518,20 @@ Rules:
                         if brace_count == 0:
                             json_end = i + 1
                             break
-                parsed_response = json.loads(json_content[:json_end])
+                
+                if brace_count != 0: # If braces are not balanced, it's truly malformed
+                    print(f"ERROR: JSON braces are unbalanced. Cannot recover. Raw content: {json_content[:500]}...")
+                    raise ValueError(f"AI response contained malformed JSON: {e}")
+
+                try:
+                    parsed_response = json.loads(json_content[:json_end])
+                    print(f"DEBUG: Successfully recovered JSON: {json.dumps(parsed_response, indent=2)}")
+                except json.JSONDecodeError as e_recover:
+                    print(f"ERROR: JSON recovery attempt also failed: {e_recover}. Raw content: {json_content[:500]}...")
+                    raise ValueError(f"AI response contained malformed JSON: {e_recover}")
                 
         except Exception as e:
-            print(f"AI call failed: {e}")
+            print(f"ERROR: AI call or JSON processing failed in handle_agent_request: {e}")
             return JSONResponse(
                 status_code=500,
                 content={"type": "error", "error": f"AI processing failed: {str(e)}"}
@@ -523,6 +663,103 @@ async def handle_create_item(supabase: Client, parsed_response: Dict[str, Any], 
         print(f"Create item error: {e}")
         raise HTTPException(status_code=500, detail=f"Failed to process item creation: {str(e)}")
 
+# --- Helper function to extend learning plan ---
+async def extend_learning_plan(llm: ChatGroq, supabase: Client, plan_id: str, user_id: str, additional_weeks: int) -> Dict[str, Any]:
+    """Extend an existing learning plan with additional weeks"""
+    try:
+        # Validate input parameters
+        if not plan_id or not isinstance(plan_id, str):
+            return {"error": "Invalid plan ID"}
+            
+        if not user_id or not isinstance(user_id, str):
+            return {"error": "Invalid user ID"}
+            
+        if not isinstance(additional_weeks, int) or additional_weeks <= 0:
+            return {"error": "Number of weeks must be a positive integer"}
+        
+        # Fetch the existing plan with error handling
+        try:
+            plan_res = supabase.from_('learning_plans').select('*').eq('id', plan_id).eq('user_id', user_id).execute()
+            
+            if not plan_res.data or len(plan_res.data) == 0:
+                return {"error": "Plan not found or you don't have permission to access it"}
+                
+            plan = plan_res.data[0]
+            current_milestones = plan.get('weekly_milestones', [])
+            
+            if not isinstance(current_milestones, list):
+                current_milestones = []
+                
+            current_weeks = len(current_milestones)
+            
+            # Generate new milestones for additional weeks
+            topic = plan.get('topic', 'Unknown Topic')
+            duration_text = f"{additional_weeks} weeks"
+            
+            # Generate new milestones with fallback to 8B model if 70B fails
+            new_milestones = []
+            try:
+                # Try 70B model first for better learning plan generation
+                specialist_llm = ChatGroq(
+                    api_key=os.getenv("GROQ_API_KEY"), 
+                    model="llama-3.1-8b-instant", 
+                    temperature=0.1
+                )
+                new_milestones = await generate_learning_milestones(specialist_llm, topic, duration_text, additional_weeks) # Pass num_weeks
+            except Exception as e:
+                print(f"70B model failed for extending plan, trying 8B fallback: {e}")
+                new_milestones = await generate_learning_milestones(llm, topic, duration_text, additional_weeks) # Pass num_weeks
+            
+            if not isinstance(new_milestones, list) or len(new_milestones) == 0:
+                return {"error": "Failed to generate new milestones. Please try again."}
+            
+            # Adjust week numbers for the new milestones
+            for i, milestone in enumerate(new_milestones, start=current_weeks + 1):
+                if not isinstance(milestone, dict):
+                    milestone = {}
+                milestone['week'] = i
+                milestone['title'] = f"Week {i}: {milestone.get('title', '').split(':', 1)[-1].strip()}"
+            
+            # Combine old and new milestones
+            updated_milestones = current_milestones + new_milestones
+            
+            # Calculate new duration in months (rounding up)
+            current_duration = plan.get('duration_months', 0)
+            if not isinstance(current_duration, (int, float)) or current_duration < 0:
+                current_duration = 0
+                
+            new_duration = current_duration + (additional_weeks // 4) + (1 if additional_weeks % 4 > 0 else 0)
+            
+            # Update the plan in the database
+            update_data = {
+                'weekly_milestones': updated_milestones,
+                'duration_months': new_duration,
+                'updated_at': 'now()'
+            }
+            
+            update_res = supabase.from_('learning_plans').update(update_data).eq('id', plan_id).execute()
+            
+            if not update_res.data or len(update_res.data) == 0:
+                return {"error": "Failed to update learning plan in the database"}
+            
+            return {
+                "success": True,
+                "plan_id": plan_id,
+                "new_weeks_added": additional_weeks,
+                "total_weeks": len(updated_milestones),
+                "updated_milestones": updated_milestones
+            }
+            
+        except Exception as e:
+            print(f"Error in extend_learning_plan database operations: {str(e)}")
+            return {"error": f"Database operation failed: {str(e)}"}
+        
+    except Exception as e:
+        print(f"Unexpected error in extend_learning_plan: {str(e)}")
+        return {"error": f"An unexpected error occurred: {str(e)}"}
+    
+    return {"error": "An unknown error occurred"}
+
 # --- Handle Generate Learning Plan Logic ---
 async def handle_generate_learning_plan(llm: ChatGroq, supabase: Client, parsed_response: Dict[str, Any], user_id: str) -> JSONResponse:
     """Handle learning plan generation with milestones and auto-task creation"""
@@ -532,62 +769,106 @@ async def handle_generate_learning_plan(llm: ChatGroq, supabase: Client, parsed_
         duration_text = plan_details.get("duration_text", "4 weeks")
         duration_months = plan_details.get("duration_months", 1)
         
+        # Calculate the number of weeks based on duration_months
+        num_weeks = duration_months * 4 # Assuming 4 weeks per month for simplicity
+        if "week" in duration_text.lower():
+            # Try to extract weeks directly if mentioned in duration_text
+            week_match = re.search(r'(\d+)\s*week', duration_text, re.IGNORECASE)
+            if week_match:
+                num_weeks = int(week_match.group(1))
+        
+        # Ensure minimum weeks for monthly plans
+        if num_weeks < duration_months * 4:
+            num_weeks = duration_months * 4
+            print(f"DEBUG: Adjusted num_weeks to {num_weeks} for {duration_months} month plan")
+        
+        # Log the start of plan generation
+        print(f"Generating learning plan for topic: {topic}, duration: {duration_text} ({num_weeks} weeks)")
+        
         # Generate detailed weekly milestones using more powerful model
         try:
             # Try 70B model first for better learning plan generation
-            specialist_llm = ChatGroq(api_key=os.getenv("GROQ_API_KEY"), model="llama-3.1-70b-versatile", temperature=0.1)
-            weekly_milestones = await generate_learning_milestones(specialist_llm, topic, duration_text)
+            print("Attempting to generate plan with 70B model...")
+            specialist_llm = ChatGroq(
+                api_key=os.getenv("GROQ_API_KEY"), 
+                model="llama-3.1-8b-instant", 
+                temperature=0.2,  # Slightly higher temperature for more creative but focused output
+                max_tokens=4000  # Ensure we have enough tokens for detailed plans
+            )
+            weekly_milestones = await generate_learning_milestones(specialist_llm, topic, duration_text, num_weeks)
+            print("Successfully generated plan with 70B model")
+            
         except Exception as e:
-            print(f"70B model failed for learning plan, trying 8B fallback: {e}")
+            print(f"70B model failed for learning plan: {str(e)}")
+            print("Falling back to 8B model...")
+            
             # Fallback to regular 8B model if 70B isn't available
             try:
-                weekly_milestones = await generate_learning_milestones(llm, topic, duration_text)
+                weekly_milestones = await generate_learning_milestones(llm, topic, duration_text, num_weeks)
+                print("Successfully generated plan with 8B model")
+                
             except Exception as fallback_error:
-                print(f"All milestone generation attempts failed: {fallback_error}")
-            # Fallback milestones
-            weekly_milestones = [
-                {
-                    "week": 1,
-                    "title": "Week 1: Getting Started",
-                    "description": f"Begin learning {topic}",
-                    "tasks": [f"Research {topic} basics", "Set up learning environment", "Create study schedule"]
-                }
-            ]
+                error_msg = f"All milestone generation attempts failed: {str(fallback_error)}"
+                print(error_msg)
+                
+                # Instead of falling back to a generic plan, return a proper error
+                return JSONResponse(
+                    status_code=500,
+                    content={
+                        "type": "error",
+                        "detail": "Failed to generate learning plan. Please try again later.",
+                        "error": error_msg
+                    }
+                )
+        
+        # Log the generated milestones for debugging
+        print(f"Generated {len(weekly_milestones)} weekly milestones")
+        if weekly_milestones:
+            print(f"First milestone: {json.dumps(weekly_milestones[0], indent=2)}")
         
         # Save learning plan to database
         plan_data = {
             "user_id": user_id,
             "topic": topic,
             "duration_months": duration_months,
-            "weekly_milestones": weekly_milestones
+            "weekly_milestones": weekly_milestones,
+            "created_at": "now()"
         }
         
         try:
+            print("Saving plan to database...")
             plan_insert_res = supabase.from_('learning_plans').insert(plan_data).execute()
             
             if not plan_insert_res.data:
                 error_msg = plan_insert_res.error.message if plan_insert_res.error else 'Unknown database error'
+                print(f"Database error: {error_msg}")
                 raise Exception(f"Failed to save learning plan: {error_msg}")
             
             created_plan = plan_insert_res.data[0]
+            print(f"Plan saved with ID: {created_plan.get('id')}")
             
             # Auto-generate first week's tasks
+            print("Creating tasks for first week...")
             created_tasks = await create_first_week_tasks(supabase, user_id, weekly_milestones)
+            print(f"Created {len(created_tasks)} tasks")
             
-            return JSONResponse(
-                status_code=200,
-                content={
-                    "type": "plan_created",
-                    "plan": {
-                        "topic": topic,
-                        "duration_text": duration_text,
-                        "weekly_milestones": [milestone.get('title', f"Week {milestone.get('week', i+1)}") for i, milestone in enumerate(weekly_milestones)]
-                    },
-                    "message": f"Created learning plan for {topic} with {len(created_tasks)} tasks for the first week.",
-                    "plan_id": created_plan.get('id'),
-                    "created_tasks_count": len(created_tasks)
-                }
-            )
+            # Prepare the response with all milestone details
+            response_data = {
+                "type": "plan_created",
+                "plan": {
+                    "id": created_plan.get('id'),
+                    "topic": topic,
+                    "duration_text": duration_text,
+                    "duration_months": duration_months,
+                    "weekly_milestones": weekly_milestones,
+                    "milestone_titles": [milestone.get('title', f"Week {milestone.get('week', i+1)}") for i, milestone in enumerate(weekly_milestones)]
+                },
+                "message": f"Created learning plan for {topic} with {len(created_tasks)} tasks for the first week.",
+                "plan_id": created_plan.get('id'),
+                "created_tasks_count": len(created_tasks)
+            }
+            
+            return JSONResponse(status_code=200, content=response_data)
             
         except Exception as e:
             print(f"Learning plan database error: {e}")
@@ -598,38 +879,57 @@ async def handle_generate_learning_plan(llm: ChatGroq, supabase: Client, parsed_
         raise HTTPException(status_code=500, detail=f"Failed to generate learning plan: {str(e)}")
 
 # --- Handle Generate Grocery Plan Logic ---
-async def handle_generate_grocery_plan(llm: ChatGroq, supabase: Client, user_input: str, user_id: str, active_goal: Dict[str, Any]) -> JSONResponse:
-    """Handle AI-powered grocery plan generation based on active goal"""
+async def handle_generate_grocery_plan(llm: ChatGroq, supabase: Client, user_input: str, user_id: str, active_goal: Optional[Dict[str, Any]]) -> JSONResponse:
+    """Handle AI-powered grocery plan generation, optionally based on an active goal."""
     try:
-        # Get current date in user's timezone
         now_ist = pendulum.now('Asia/Kolkata')
         today_in_ist = now_ist.format('dddd, MMMM D, YYYY')
         
-        # Fetch user's current groceries for context
         try:
-            current_groceries_res = supabase.from_('groceries').select('item_name, quantity, unit, bought').eq('user_id', user_id).eq('bought', False).execute()
+            current_groceries_res = supabase.from_('groceries').select('item_name, quantity, unit, bought').eq('user_id', user_id).eq('bought', False).limit(5).execute()
             current_groceries = current_groceries_res.data if current_groceries_res.data else []
         except Exception as e:
             print(f"Failed to fetch current groceries: {e}")
             current_groceries = []
         
-        # Create specialist nutrition and meal planning prompt
-        specialist_prompt = f"""
-You are an expert Indian nutritionist, meal planner, and budget advisor. Today is {today_in_ist}.
+        # Determine goal context for the AI prompt
+        goal_context_str = ""
+        goal_type_for_prompt = "general health"
+        goal_id_for_db = None
 
+        if active_goal and active_goal.get('id'):
+            goal_id_for_db = active_goal['id']
+            goal_type_for_prompt = active_goal.get('goal_type', 'unknown').replace('_', ' ')
+            goal_context_str = f"""
 USER'S ACTIVE GOAL:
-- Goal Type: {active_goal.get('goal_type', 'unknown')}
+- Goal Type: {goal_type_for_prompt}
 - Goal Title: {active_goal.get('title', 'Unknown Goal')}
 - Target: {active_goal.get('target_value', 'Not specified')} {active_goal.get('target_unit', '')}
 - Metadata: {json.dumps(active_goal.get('metadata', {}))}
+"""
+        else:
+            # Attempt to infer goal type and budget from user input if no active goal is provided
+            if re.search(r"muscle building|muscle gain", user_input, re.IGNORECASE):
+                goal_type_for_prompt = "muscle gain"
+            elif re.search(r"weight loss", user_input, re.IGNORECASE):
+                goal_type_for_prompt = "weight loss"
+            elif re.search(r"budget|affordable", user_input, re.IGNORECASE):
+                goal_type_for_prompt = "budget eating"
+            
+            goal_context_str = f"The user is asking for a grocery plan with a focus on {goal_type_for_prompt}."
+
+        specialist_prompt = f"""
+You are an expert Indian nutritionist, meal planner, and budget advisor. Today is {today_in_ist}.
+
+{goal_context_str}
 
 CURRENT GROCERIES (Unbought):
 {json.dumps(current_groceries)}
 
 USER REQUEST: "{user_input}"
 
-Based on the user's goal and request, generate a comprehensive, week-long grocery shopping list that is:
-1. Nutritionally aligned with their {active_goal.get('goal_type', '').replace('_', ' ')} goal
+Based on the user's request and the goal context, generate a comprehensive, week-long grocery shopping list that is:
+1. Nutritionally aligned with their {goal_type_for_prompt} goal/focus
 2. Budget-conscious with realistic Indian market prices
 3. Practical for making simple, healthy Indian meals
 4. Complementary to their existing groceries (avoid duplicates)
@@ -642,9 +942,9 @@ PRICING GUIDELINES:
 - Proteins: ₹150-400 per kg
 
 GOAL-SPECIFIC CONSIDERATIONS:
-{"For weight loss: Focus on low-calorie, high-fiber, high-protein foods. Include plenty of vegetables, lean proteins, and whole grains." if active_goal.get('goal_type') == 'weight_loss' else ""}
-{"For muscle gain: Emphasize high-protein foods, complex carbs, and healthy fats. Include paneer, dal, quinoa, nuts." if active_goal.get('goal_type') == 'muscle_gain' else ""}
-{"For budget eating: Focus on cost-effective staples like rice, dal, seasonal vegetables, and affordable proteins." if active_goal.get('goal_type') == 'budget_eating' else ""}
+{"For weight loss: Focus on low-calorie, high-fiber, high-protein foods. Include plenty of vegetables, lean proteins, and whole grains." if goal_type_for_prompt == 'weight loss' else ""}
+{"For muscle gain: Emphasize high-protein foods, complex carbs, and healthy fats. Include paneer, dal, quinoa, nuts." if goal_type_for_prompt == 'muscle gain' else ""}
+{"For budget eating: Focus on cost-effective staples like rice, dal, seasonal vegetables, and affordable proteins." if goal_type_for_prompt == 'budget eating' else ""}
 
 Return ONLY a valid JSON object in this exact format:
 {{
@@ -665,29 +965,24 @@ Ensure the list contains 10-15 items for a full week of healthy meals. Include a
 - Fruits (seasonal and affordable)
 """
         
-        # Use more powerful model for complex grocery planning
         try:
-            specialist_llm = ChatGroq(api_key=os.getenv("GROQ_API_KEY"), model="llama-3.1-70b-versatile", temperature=0.3)
+            specialist_llm = ChatGroq(api_key=os.getenv("GROQ_API_KEY"), model="llama-3.1-8b-instant", temperature=0.3)
             response = await specialist_llm.ainvoke(specialist_prompt)
         except Exception as e:
-            # Fallback to regular model if 70B is not available
-            print(f"70B model failed, using 8B fallback: {e}")
+            print(f"8B model failed, using fallback: {e}")
             response = await llm.ainvoke(specialist_prompt)
         
         ai_content = response.content.strip()
         
-        # Extract JSON from AI response
         json_start = ai_content.find('{')
         if json_start == -1:
             raise ValueError("AI did not return valid JSON for grocery plan.")
         
         json_content = ai_content[json_start:]
         
-        # Handle potential trailing text after JSON
         try:
             parsed_plan = json.loads(json_content)
         except json.JSONDecodeError:
-            # Try to find the end of the JSON object
             brace_count = 0
             json_end = json_start
             for i, char in enumerate(json_content):
@@ -715,7 +1010,7 @@ Ensure the list contains 10-15 items for a full week of healthy meals. Include a
                 "unit": item.get("unit", "piece"),
                 "price": item.get("estimated_price", 0),
                 "bought": False,
-                "goal_id": active_goal.get("id") if "id" in active_goal else None  # Link to active goal
+                "goal_id": goal_id_for_db # Use the determined goal_id
             }
             items_to_insert.append(grocery_data)
         
@@ -725,7 +1020,7 @@ Ensure the list contains 10-15 items for a full week of healthy meals. Include a
             
             if not insert_res.data:
                 error_msg = insert_res.error.message if insert_res.error else 'Unknown database error'
-                raise Exception(f"Failed to insert grocery items: {error_msg}")
+                raise Exception(f"Database insert failed: {error_msg}")
             
             created_items = insert_res.data
             
@@ -735,8 +1030,12 @@ Ensure the list contains 10-15 items for a full week of healthy meals. Include a
             
             # Generate summary message
             total_estimated_cost = sum(item.get("estimated_price", 0) for item in grocery_items)
-            summary_message = f"Generated a personalized grocery plan for your {active_goal.get('goal_type', '').replace('_', ' ')} goal! Added {len(created_items)} items with estimated cost of ₹{total_estimated_cost:.2f}. The plan includes nutritionally balanced foods to help you achieve your target."
             
+            if active_goal:
+                summary_message = f"Generated a personalized grocery plan for your {goal_type_for_prompt} goal! Added {len(created_items)} items with estimated cost of ₹{total_estimated_cost:.2f}. The plan includes nutritionally balanced foods to help you achieve your target."
+            else:
+                summary_message = f"Generated a grocery plan focusing on {goal_type_for_prompt}! Added {len(created_items)} items with estimated cost of ₹{total_estimated_cost:.2f}. The plan includes nutritionally balanced foods."
+
             return JSONResponse(
                 status_code=200,
                 content={
@@ -744,7 +1043,7 @@ Ensure the list contains 10-15 items for a full week of healthy meals. Include a
                     "message": summary_message,
                     "items_added": len(created_items),
                     "estimated_total_cost": total_estimated_cost,
-                    "goal_type": active_goal.get('goal_type'),
+                    "goal_type": goal_type_for_prompt,
                     "items": created_items
                 }
             )
@@ -767,7 +1066,286 @@ async def health_check():
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Health check failed: {str(e)}")
 
+# --- Extend Learning Plan Endpoint ---
+@app.post("/api/extend-learning-plan")
+async def extend_learning_plan_endpoint(request: Request):
+    """
+    Endpoint to extend an existing learning plan with additional weeks of milestones.
+    
+    Request body should contain:
+    - plan_id: ID of the learning plan to extend
+    - additional_weeks: Number of weeks to add (defaults to 4 if not provided)
+    
+    Headers should include:
+    - user-id: ID of the authenticated user
+    """
+    try:
+        # Get required clients
+        try:
+            llm, supabase = get_clients()
+        except Exception as e:
+            print(f"Failed to initialize clients: {e}")
+            raise HTTPException(
+                status_code=500,
+                detail="Failed to initialize required services. Please try again later."
+            )
+        
+        # Parse and validate request data
+        try:
+            data = await request.json()
+            plan_id = data.get('plan_id')
+            additional_weeks = int(data.get('additional_weeks', 4))  # Default to 4 weeks
+            
+            if not plan_id:
+                raise ValueError("Plan ID is required")
+            if additional_weeks <= 0:
+                raise ValueError("Number of weeks must be a positive integer")
+                
+        except (ValueError, TypeError) as e:
+            raise HTTPException(status_code=400, detail=f"Invalid request data: {str(e)}")
+            
+        # Get and validate user ID from auth
+        user_id = request.headers.get('user-id')
+        if not user_id:
+            raise HTTPException(
+                status_code=401, 
+                detail="Authentication required. Please log in again."
+            )
+        
+        # Call the extend learning plan function
+        try:
+            result = await extend_learning_plan(llm, supabase, plan_id, user_id, additional_weeks)
+        except Exception as e:
+            print(f"Error in extend_learning_plan: {e}")
+            raise HTTPException(
+                status_code=500,
+                detail="An error occurred while processing your request. Please try again."
+            )
+        
+        # Check for errors in the result
+        if 'error' in result:
+            raise HTTPException(status_code=400, detail=result['error'])
+        
+        # Return success response
+        return JSONResponse(
+            status_code=200,
+            content={
+                "status": "success",
+                "message": f"Successfully extended learning plan with {additional_weeks} additional weeks",
+                "plan_id": result['plan_id'],
+                "total_weeks": result['total_weeks']
+            }
+        )
+        
+    except HTTPException as he:
+        # Re-raise HTTP exceptions as they are
+        raise he
+        
+    except Exception as e:
+        # Log the full error for debugging
+        import traceback
+        error_trace = traceback.format_exc()
+        print(f"Unexpected error in extend_learning_plan_endpoint: {error_trace}")
+        
+        # Return a generic error message to the client
+        raise HTTPException(
+            status_code=500,
+            detail="An unexpected error occurred. Our team has been notified."
+        )
+
 # --- Root endpoint ---
 @app.get("/")
 async def root():
     return {"message": "AI Life Planner Agent API", "version": "1.0.0"}
+
+# --- Helper function to convert units to grams ---
+def convert_to_grams(quantity: float, unit: str) -> float:
+    """Helper function to convert all units to a standard base (grams)"""
+    lower_unit = unit.lower()
+    if lower_unit == 'kg':
+        return quantity * 1000
+    # Add other conversions if needed, e.g., for 'L' to 'ml' assuming 1ml = 1g
+    # For 'pc' (piece), we can't convert to grams, so we'll handle it differently.
+    return quantity # Assume 'g' or 'pc' for now
+
+# --- Nutrition Enrichment Endpoint ---
+@app.post("/api/enrich-grocery-item")
+async def enrich_grocery_item(request: Request):
+    """
+    Endpoint to enrich a grocery item with nutrition data from CalorieNinja API.
+    This is called as a fire-and-forget task from handle_create_item.
+    """
+    try:
+        # Load environment variables fresh for this endpoint
+        load_dotenv()
+        
+        body = await request.json()
+        item_name = body.get("item_name")
+        grocery_id = body.get("grocery_id")
+        user_id = body.get("user_id")
+        quantity = body.get("quantity")
+        unit = body.get("unit")
+
+        # More detailed validation with specific error messages
+        missing_fields = []
+        if not item_name:
+            missing_fields.append("item_name")
+        if quantity is None:
+            missing_fields.append("quantity")
+        if not unit:
+            missing_fields.append("unit")
+        if not grocery_id:
+            missing_fields.append("grocery_id")
+        if not user_id:
+            missing_fields.append("user_id")
+            
+        if missing_fields:
+            raise HTTPException(
+                status_code=400,
+                detail=f"Missing required fields: {', '.join(missing_fields)}. Received: item_name='{item_name}', quantity={quantity}, unit='{unit}', grocery_id='{grocery_id}', user_id='{user_id}'"
+            )
+
+        calorie_ninja_api_key = os.getenv("CALORIENINJA_API_KEY")
+        print(f"DEBUG: CALORIENINJA_API_KEY = '{calorie_ninja_api_key}'")
+        if not calorie_ninja_api_key:
+            print("CalorieNinja API key not available, returning item without enrichment")
+            # Return the original item without enrichment instead of failing
+            update_res = supabase_client.from_('groceries').select('*').eq('id', grocery_id).eq('user_id', user_id).single().execute()
+            if update_res.data:
+                return JSONResponse(status_code=200, content={"message": "Grocery item added (nutrition enrichment unavailable)", "item": update_res.data})
+            else:
+                raise HTTPException(status_code=404, detail="Grocery item not found.")
+        
+        # Get Supabase client fresh for this endpoint
+        supabase_url = os.getenv("VITE_SUPABASE_URL")
+        supabase_key = os.getenv("SUPABASE_SERVICE_ROLE_KEY")
+        if not supabase_url or not supabase_key:
+            raise HTTPException(status_code=500, detail="Supabase environment variables not set.")
+        
+        supabase_client = create_client(supabase_url, supabase_key)
+
+        # --- STEP 1: Get Base Nutrition Data (always for 100g) ---
+        # We send a CLEAN query to the API, just the item name.
+        api_query = item_name
+        ninja_api_url = f"https://api.api-ninjas.com/v1/nutrition?query={api_query}"
+        
+        try:
+            async with httpx.AsyncClient() as client:
+                api_response = await client.get(
+                    ninja_api_url,
+                    headers={"X-Api-Key": calorie_ninja_api_key},
+                    timeout=10.0
+                )
+                api_response.raise_for_status()
+                nutrition_data = api_response.json()
+                print(f"DEBUG: API response type: {type(nutrition_data)}")
+                print(f"DEBUG: API response content: {nutrition_data}")
+        except Exception as e:
+            print(f"API Ninjas API request failed: {e}")
+            # Return the original item without enrichment when API fails
+            update_res = supabase_client.from_('groceries').select('*').eq('id', grocery_id).eq('user_id', user_id).single().execute()
+            if update_res.data:
+                return JSONResponse(status_code=200, content={"message": "Grocery item added (nutrition enrichment unavailable)", "item": update_res.data})
+            else:
+                raise HTTPException(status_code=404, detail="Grocery item not found.")
+
+        # API Ninjas returns an array directly, not an object with "items" key
+        base_nutrition = nutrition_data[0] if nutrition_data and len(nutrition_data) > 0 else None
+        print(f"DEBUG: base_nutrition type: {type(base_nutrition)}")
+        print(f"DEBUG: base_nutrition content: {base_nutrition}")
+
+        # If the API can't find the food, we can't proceed.
+        if not base_nutrition:
+            print(f"API Ninjas could not find base nutrition for \"{item_name}\".")
+            # Return the original item without enrichment
+            update_res = supabase_client.from_('groceries').select('*').eq('id', grocery_id).eq('user_id', user_id).single().execute()
+            if update_res.data and len(update_res.data) > 0:
+                return JSONResponse(status_code=200, content={"message": "Grocery item added (nutrition data not found)", "item": update_res.data[0]})
+            else:
+                raise HTTPException(status_code=404, detail="Grocery item not found.")
+        
+        # --- STEP 2: The Definitive Calculation Logic ---
+        final_calories = 0.0
+        final_protein = 0.0
+        final_fat = 0.0
+        final_carbohydrates = 0.0
+        final_sugar = 0.0
+        final_fiber = 0.0
+        final_cholesterol = 0.0
+        final_sodium = 0.0
+
+        # Helper function to safely get numeric values from API response
+        def safe_get_numeric(data, key, default=0):
+            value = data.get(key, default)
+            if isinstance(value, str) and "premium" in value.lower():
+                return default  # Return default for premium-only fields
+            try:
+                return float(value) if value is not None else default
+            except (ValueError, TypeError):
+                return default
+        
+        serving_size_g = safe_get_numeric(base_nutrition, "serving_size_g", 100)
+
+        if unit.lower() in ['pc', 'piece']:
+            # For items sold by piece, multiply the base nutrition by the quantity.
+            final_calories = safe_get_numeric(base_nutrition, "calories", 0) * quantity
+            final_protein = safe_get_numeric(base_nutrition, "protein_g", 0) * quantity
+            final_fat = safe_get_numeric(base_nutrition, "fat_total_g", 0) * quantity
+            final_carbohydrates = safe_get_numeric(base_nutrition, "carbohydrates_total_g", 0) * quantity
+            final_sugar = safe_get_numeric(base_nutrition, "sugar_g", 0) * quantity
+            final_fiber = safe_get_numeric(base_nutrition, "fiber_g", 0) * quantity
+            final_cholesterol = safe_get_numeric(base_nutrition, "cholesterol_mg", 0) * quantity
+            final_sodium = safe_get_numeric(base_nutrition, "sodium_mg", 0) * quantity
+        else:
+            # For items sold by weight, calculate nutrition per gram and then multiply.
+            calories_per_gram = safe_get_numeric(base_nutrition, "calories", 0) / serving_size_g
+            protein_per_gram = safe_get_numeric(base_nutrition, "protein_g", 0) / serving_size_g
+            fat_per_gram = safe_get_numeric(base_nutrition, "fat_total_g", 0) / serving_size_g
+            carbohydrates_per_gram = safe_get_numeric(base_nutrition, "carbohydrates_total_g", 0) / serving_size_g
+            sugar_per_gram = safe_get_numeric(base_nutrition, "sugar_g", 0) / serving_size_g
+            fiber_per_gram = safe_get_numeric(base_nutrition, "fiber_g", 0) / serving_size_g
+            cholesterol_per_gram = safe_get_numeric(base_nutrition, "cholesterol_mg", 0) / serving_size_g
+            sodium_per_gram = safe_get_numeric(base_nutrition, "sodium_mg", 0) / serving_size_g
+
+            user_quantity_in_grams = convert_to_grams(quantity, unit)
+            final_calories = calories_per_gram * user_quantity_in_grams
+            final_protein = protein_per_gram * user_quantity_in_grams
+            final_fat = fat_per_gram * user_quantity_in_grams
+            final_carbohydrates = carbohydrates_per_gram * user_quantity_in_grams
+            final_sugar = sugar_per_gram * user_quantity_in_grams
+            final_fiber = fiber_per_gram * user_quantity_in_grams
+            final_cholesterol = cholesterol_per_gram * user_quantity_in_grams
+            final_sodium = sodium_per_gram * user_quantity_in_grams
+
+        enriched_data = {
+            "calories": round(final_calories),
+            "protein_g": round(final_protein, 1),
+            "fat_total_g": round(final_fat, 1),
+            "carbohydrates_total_g": round(final_carbohydrates, 1),
+            "sugar_g": round(final_sugar, 1),
+            "fiber_g": round(final_fiber, 1),
+            "cholesterol_mg": round(final_cholesterol),
+            "sodium_mg": round(final_sodium),
+        }
+        
+        # Filter out None values to avoid overwriting existing data with nulls if API returns incomplete data
+        enriched_data = {k: v for k, v in enriched_data.items() if v is not None}
+
+        # --- STEP 3: Update Supabase with ACCURATE data ---
+        update_res = supabase_client.from_('groceries').update(enriched_data).eq('id', grocery_id).eq('user_id', user_id).select().execute()
+
+        if update_res.data and len(update_res.data) > 0:
+            updated_item = update_res.data[0]
+            return JSONResponse(status_code=200, content={"message": "Grocery item enriched successfully", "nutrition": updated_item})
+        else:
+            print(f"Supabase update failed for grocery_id {grocery_id}: {update_res.error}")
+            raise HTTPException(status_code=500, detail="Failed to update grocery item with nutrition data.")
+
+    except HTTPException:
+        raise # Re-raise HTTP exceptions
+    except httpx.HTTPStatusError as e:
+        print(f"CalorieNinja API HTTP error: {e.response.status_code} - {e.response.text}")
+        raise HTTPException(status_code=e.response.status_code, detail=f"CalorieNinja API error: {e.response.text}")
+    except Exception as e:
+        print(f"Enrich grocery item error: {e}")
+        raise HTTPException(status_code=500, detail=f"An unexpected error occurred during enrichment: {str(e)}")

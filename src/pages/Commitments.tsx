@@ -17,7 +17,7 @@ import { Commitment } from '../../types/api';
 import { SmartQuickAdd } from '@/components/SmartQuickAdd';
 import { AISuggestionsPanel } from '@/components/AISuggestionsPanel';
 import { CalendarWidget } from '@/components/CalendarWidget';
-import { calculatePriority } from '@/utils/commitmentAI';
+import { calculatePriority } from '../utils/commitmentAI';
 
 export default function Commitments() {
   const [isCreateModalOpen, setIsCreateModalOpen] = useState(false);
