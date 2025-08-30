@@ -137,6 +137,7 @@ interface DataContextType {
 
   // AI-powered functions
   enrichGroceryItem: (groceryId: string, itemName: string, quantity: number, unit: string) => Promise<void>;
+  createWithAI: (userInput: string) => Promise<{ type: string; item?: any; message?: string }>;
 
   // Utility for triggering refetch from external components
   refetchKey: number;
@@ -781,6 +782,68 @@ export function DataProvider({ children }: { children: ReactNode }) {
     }
   }, [user]);
 
+  const createWithAI = useCallback(async (userInput: string): Promise<{ type: string; item?: any; message?: string }> => {
+    if (!user) {
+      throw new Error('User not authenticated');
+    }
+
+    try {
+      const response = await fetch('http://localhost:8000/api/agent', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({
+          userInput,
+          userId: user.id,
+        }),
+      });
+
+      if (!response.ok) {
+        const errorText = await response.text();
+        let errorMessage = `Server error: ${response.status}`;
+        try {
+          const errorData = JSON.parse(errorText);
+          errorMessage = errorData.detail || errorData.error || errorData.message || errorMessage;
+        } catch {
+          errorMessage = errorText || errorMessage;
+        }
+        throw new Error(errorMessage);
+      }
+
+      const data = await response.json();
+      
+      // Handle successful creation by refreshing relevant data
+      if (data.type === 'creation_success' && data.item) {
+        // Determine what type of item was created and refresh that data
+        if (data.item.title && data.item.priority !== undefined) {
+          // This looks like a task
+          await refetchTasks();
+        } else if (data.item.start_time && data.item.end_time) {
+          // This looks like a commitment
+          await refetchCommitments();
+        } else if (data.item.item_name) {
+          // This looks like a grocery item
+          await refetchGroceries();
+        } else if (data.item.amount !== undefined) {
+          // This looks like an expense
+          await refetchExpenses();
+        } else if (data.item.due_date) {
+          // This looks like a reminder
+          await refetchReminders();
+        }
+      }
+      
+      return {
+        type: data.type || 'success',
+        item: data.item,
+        message: data.message
+      };
+    } catch (error: any) {
+      throw new Error(error.message || 'Failed to process request');
+    }
+  }, [user, refetchTasks, refetchCommitments, refetchGroceries, refetchExpenses, refetchReminders]);
+
   const value: DataContextType = {
     // Data arrays
     tasks,
@@ -819,6 +882,7 @@ export function DataProvider({ children }: { children: ReactNode }) {
 
     // AI functions
     enrichGroceryItem,
+    createWithAI,
 
     // Utility
     refetchKey,

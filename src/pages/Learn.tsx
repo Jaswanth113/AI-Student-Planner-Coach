@@ -131,7 +131,7 @@ export default function Learn() {
     
     try {
       // Directly call the backend API to generate the learning plan
-      const response = await fetch('/api/agent', {
+      const response = await fetch('http://localhost:8000/api/agent', {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
@@ -309,7 +309,7 @@ export default function Learn() {
       });
       
       // Call the API to extend the learning plan
-      const response = await fetch('/api/extend-learning-plan', {
+      const response = await fetch('http://localhost:8000/api/extend-learning-plan', {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',

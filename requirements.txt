@@ -1,0 +1,9 @@
+fastapi==0.104.1
+python-dotenv==1.0.0
+supabase==2.0.0
+langchain-groq==0.1.0
+pendulum==3.0.0
+httpx==0.25.2
+uvicorn==0.24.0
+new-dependency==1.0.0
+another-dependency
