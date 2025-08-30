@@ -40,7 +40,7 @@ export function useAgent() {
     setConversationHistory(newHistory);
 
     try {
-      const response = await fetch('/api/agent', {
+      const response = await fetch('http://localhost:8000/api/agent', {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',

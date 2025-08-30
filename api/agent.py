@@ -414,15 +414,17 @@ Respond with ONE of these JSON formats based on intent:
 
 1. TASKS (anything to do, review, study, work on, complete, etc.):
    {{ "intent": "create_item", "type": "task", "data": {{ 
-       "title": "Clear, actionable task title", 
-       "description": "Helpful description with context",
-       "category": "Personal/Work/Health/Learning",
-       "priority": 1-3 (1=urgent, 2=normal, 3=low),
-       "estimate": estimated_minutes_to_complete,
-       "due_absolute_iso": "2025-08-31T17:00:00" (only if specific time mentioned),
-       "tags": ["relevant", "category", "tags"],
+       "title": "Review Python basics", 
+       "description": "Study fundamental Python concepts",
+       "category": "Learning",
+       "priority": 2,
+       "estimate": 60,
+       "tags": ["python", "learning"],
        "status": "Inbox"
    }} }}
+   
+   Example for "Create a task to review Python basics":
+   {{ "intent": "create_item", "type": "task", "data": {{ "title": "Review Python basics", "description": "Study fundamental Python concepts", "category": "Learning", "priority": 2, "estimate": 60, "tags": ["python", "learning"], "status": "Inbox" }} }}
 
 2. GOALS:
    {{ "intent": "create_item", "type": "goal", "data": {{ 
