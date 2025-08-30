@@ -1,0 +1,11 @@
+{
+  "dependencies": {
+    "@langchain/groq": "^0.2.3",
+    "@supabase/supabase-js": "^2.56.1",
+    "luxon": "^3.7.1"
+  },
+  "devDependencies": {
+    "@types/luxon": "^3.7.1",
+    "@vercel/node": "^5.3.17"
+  }
+}

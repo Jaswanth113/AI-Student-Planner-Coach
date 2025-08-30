@@ -1,0 +1,6 @@
+fastapi
+uvicorn
+supabase
+langchain-groq
+python-dotenv
+pendulum
