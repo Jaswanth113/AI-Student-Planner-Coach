@@ -1,5 +1,5 @@
-import { useState } from 'react';
-import { Calendar, Clock, Plus, MapPin, Users, Edit, Trash2, ExternalLink, Video } from 'lucide-react';
+import { useState, useEffect } from 'react';
+import { Calendar, Clock, Plus, MapPin, Users, Edit, Trash2, ExternalLink, Video, Sparkles, Brain } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Badge } from '@/components/ui/badge';
@@ -9,15 +9,40 @@ import { Input } from '@/components/ui/input';
 import { Textarea } from '@/components/ui/textarea';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { useCommitments } from '@/hooks/useSupabaseData';
+import { useCommitmentAI } from '@/hooks/useCommitmentAI';
+import { useSmartReminders } from '@/hooks/useSmartReminders';
 import { supabase } from '@/integrations/supabase/client';
 import { useToast } from '@/hooks/use-toast';
 import { Commitment } from '../../types/api';
+import { SmartQuickAdd } from '@/components/SmartQuickAdd';
+import { AISuggestionsPanel } from '@/components/AISuggestionsPanel';
+import { CalendarWidget } from '@/components/CalendarWidget';
+import { calculatePriority } from '@/utils/commitmentAI';
 
 export default function Commitments() {
   const [isCreateModalOpen, setIsCreateModalOpen] = useState(false);
   const [editingCommitment, setEditingCommitment] = useState<Commitment | null>(null);
+  const [showAIPanel, setShowAIPanel] = useState(true);
   const { commitments, loading, refetch } = useCommitments();
   const { toast } = useToast();
+  
+  // AI Hooks
+  const {
+    suggestions,
+    setSuggestions,
+    getAISuggestions,
+    sortedCommitments,
+    todaysCommitments: aiTodaysCommitments,
+    upcomingCommitments: aiUpcomingCommitments,
+    suggestImprovements
+  } = useCommitmentAI(commitments);
+  
+  const {
+    activeReminders,
+    dismissReminder,
+    notificationSettings,
+    updateSettings
+  } = useSmartReminders(commitments);
 
   const [formData, setFormData] = useState({
     title: '',
@@ -25,7 +50,7 @@ export default function Commitments() {
     start_time: '',
     end_time: '',
     location: '',
-    type: 'meeting' as const,
+    type: 'social' as const,
     attendees: '',
     link: '',
     calendar_id: '',
@@ -40,7 +65,7 @@ export default function Commitments() {
       start_time: '',
       end_time: '',
       location: '',
-      type: 'meeting',
+      type: 'social',
       attendees: '',
       link: '',
       calendar_id: '',
@@ -226,12 +251,11 @@ export default function Commitments() {
             <SelectValue placeholder="Select type" />
           </SelectTrigger>
           <SelectContent>
-            <SelectItem value="meeting">Meeting</SelectItem>
-            <SelectItem value="call">Call</SelectItem>
-            <SelectItem value="appointment">Appointment</SelectItem>
-            <SelectItem value="event">Event</SelectItem>
-            <SelectItem value="deadline">Deadline</SelectItem>
-            <SelectItem value="personal">Personal</SelectItem>
+            <SelectItem value="class">Class</SelectItem>
+            <SelectItem value="hackathon">Hackathon</SelectItem>
+            <SelectItem value="gym">Gym</SelectItem>
+            <SelectItem value="social">Social</SelectItem>
+            <SelectItem value="exam">Exam</SelectItem>
           </SelectContent>
         </Select>
       </div>
@@ -301,6 +325,103 @@ export default function Commitments() {
       </div>
     );
   }
+
+  // Generate AI suggestions on component mount
+  useEffect(() => {
+    const aiSuggestions = getAISuggestions();
+    setSuggestions(aiSuggestions);
+  }, [commitments, getAISuggestions, setSuggestions]);
+
+  // Handle commitment created from smart quick add
+  const handleCommitmentCreated = (commitment: Commitment) => {
+    refetch();
+    toast({
+      title: 'Commitment Created',
+      description: `"${commitment.title}" has been added to your schedule`
+    });
+  };
+
+  // Handle dismissal of AI suggestion
+  const handleDismissSuggestion = (index: number) => {
+    setSuggestions(prev => prev.filter((_, i) => i !== index));
+  };
+
+  // Handle applying an AI suggestion
+  const handleApplySuggestion = (suggestion: any) => {
+    if (suggestion.action) {
+      suggestion.action();
+    }
+    handleDismissSuggestion(suggestions.indexOf(suggestion));
+  };
+
+  // Toggle AI panel visibility
+  const toggleAIPanel = () => {
+    setShowAIPanel(prev => !prev);
+  };
+
+  // Handle calendar widget interactions
+  const handleCalendarCommitmentClick = (commitment: Commitment) => {
+    handleEdit(commitment);
+  };
+
+  const handleCalendarTimeSlotClick = (date: Date, hour: number) => {
+    const startTime = new Date(date);
+    startTime.setHours(hour, 0, 0, 0);
+    const endTime = new Date(startTime);
+    endTime.setHours(hour + 1, 0, 0, 0);
+    
+    setFormData({
+      title: '',
+      description: '',
+      start_time: startTime.toISOString().slice(0, 16),
+      end_time: endTime.toISOString().slice(0, 16),
+      location: '',
+      type: 'social',
+      attendees: '',
+      link: '',
+      calendar_id: '',
+      recurring: false
+    });
+    setIsCreateModalOpen(true);
+  };
+
+  const handleCalendarCommitmentMove = async (commitment: Commitment, newStartTime: Date) => {
+    const originalDuration = new Date(commitment.end_time).getTime() - new Date(commitment.start_time).getTime();
+    const newEndTime = new Date(newStartTime.getTime() + originalDuration);
+    
+    try {
+      const { error } = await supabase
+        .from('commitments')
+        .update({
+          start_time: newStartTime.toISOString(),
+          end_time: newEndTime.toISOString()
+        })
+        .eq('id', commitment.id);
+
+      if (error) throw error;
+
+      toast({
+        title: 'Commitment Rescheduled',
+        description: `"${commitment.title}" has been moved to ${newStartTime.toLocaleDateString('en-US', {
+          weekday: 'short',
+          month: 'short',
+          day: 'numeric'
+        })} at ${newStartTime.toLocaleTimeString('en-US', {
+          hour: 'numeric',
+          minute: '2-digit',
+          hour12: true
+        })}`
+      });
+
+      refetch();
+    } catch (error: any) {
+      toast({
+        title: 'Error',
+        description: error.message || 'Failed to reschedule commitment',
+        variant: 'destructive'
+      });
+    }
+  };
 
   const upcomingCommitments = getUpcomingCommitments();
   const todaysCommitments = getTodaysCommitments();
@@ -381,6 +502,39 @@ export default function Commitments() {
           </CardContent>
         </Card>
       </div>
+
+      {/* Smart Quick Add */}
+      <Card>
+        <CardHeader>
+          <CardTitle className="flex items-center gap-2">
+            <Sparkles className="w-5 h-5" />
+            Smart Add Commitment
+            <Button
+              size="sm"
+              variant="outline"
+              onClick={toggleAIPanel}
+              className="ml-auto gap-1"
+            >
+              <Brain className="w-3 h-3" />
+              {showAIPanel ? 'Hide' : 'Show'} AI
+            </Button>
+          </CardTitle>
+        </CardHeader>
+        <CardContent>
+          <SmartQuickAdd onCommitmentCreated={handleCommitmentCreated} />
+        </CardContent>
+      </Card>
+
+      {/* AI Suggestions Panel */}
+      {showAIPanel && (
+        <AISuggestionsPanel
+          suggestions={suggestions}
+          reminders={activeReminders}
+          onDismissSuggestion={handleDismissSuggestion}
+          onDismissReminder={dismissReminder}
+          onApplySuggestion={handleApplySuggestion}
+        />
+      )}
 
       <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
         {/* Today's Schedule */}
@@ -530,6 +684,14 @@ export default function Commitments() {
           </CardContent>
         </Card>
       </div>
+
+      {/* Calendar Widget */}
+      <CalendarWidget
+        commitments={commitments}
+        onCommitmentClick={handleCalendarCommitmentClick}
+        onTimeSlotClick={handleCalendarTimeSlotClick}
+        onCommitmentMove={handleCalendarCommitmentMove}
+      />
     </div>
   );
 }

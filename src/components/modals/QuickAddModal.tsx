@@ -42,19 +42,38 @@ export const QuickAddModal = ({ isOpen, onClose }: QuickAddModalProps) => {
     try {
       const result = await sendMessageToAgent(text.trim());
       
-      if (result.error) {
-        throw new Error(result.error);
+      if (result.type === 'error') {
+        throw new Error(result.detail || result.message || result.error || 'An unknown error occurred.');
       }
 
-      // The backend now responds with 202 Accepted and a generic message.
-      // The actual item creation happens in the background, and UI updates via Realtime.
-      toast({ 
-        title: 'Success!',
-        description: result.message || 'Your request is being processed by the AI.'
-      });
-
-      // No need to call refetch functions here, Realtime will handle it.
-      // The modal will close, and the user will see the new item appear via Realtime.
+      if (result.type === 'creation_success') {
+        toast({ 
+          title: 'Success!',
+          description: result.message || `Successfully created ${result.item?.title || result.item?.item_name || 'item'}.`
+        });
+        // Refetch data based on the type of item created
+        if (result.item?.type === 'task' || result.item?.title) { // Assuming tasks have a 'title'
+          refetchTasks();
+        } else if (result.item?.item_name) { // Assuming groceries have 'item_name'
+          refetchGroceries();
+        }
+        // No explicit refetch for reminders, as they might be handled differently or via Realtime
+      } else if (result.type === 'answer') {
+        toast({
+          title: 'AI Answer',
+          description: result.text || 'The AI provided an answer.'
+        });
+      } else if (result.type === 'plan_created') {
+        toast({
+          title: 'Learning Plan Created',
+          description: result.message || `Successfully generated a learning plan for ${result.plan?.topic || 'your request'}.`
+        });
+      } else {
+        toast({
+          title: 'AI Response',
+          description: result.message || 'The AI processed your request.'
+        });
+      }
 
       handleClose();
     } catch (error: any) {

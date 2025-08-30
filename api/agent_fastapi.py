@@ -79,58 +79,25 @@ async def trigger_grocery_enrichment(grocery_item: Dict[str, Any]):
 async def generate_learning_milestones(llm: ChatGroq, topic: str, duration_text: str) -> list:
     """Generate detailed weekly milestones for a learning plan"""
     milestone_prompt = f"""
-You are an expert learning plan creator and educational consultant. Generate a comprehensive, week-by-week learning plan for the topic: "{topic}" over the duration: "{duration_text}".
-
-Create a progressive, practical learning journey that includes:
-- Clear learning objectives for each week
-- Specific, actionable tasks (4-6 per week)
-- Resources and materials needed
-- Practice exercises and assessments
-- Real-world applications where possible
-
-Ensure the plan is:
-✓ Structured from beginner to intermediate/advanced level
-✓ Includes both theoretical understanding and practical application
-✓ Has realistic time commitments for each task
-✓ Progressive difficulty that builds on previous weeks
-✓ Includes review and reinforcement activities
+You are an expert learning plan creator. Generate a detailed, week-by-week learning plan for the topic: "{topic}" over the duration: "{duration_text}".
 
 Return ONLY a JSON array of weekly milestone objects in this exact format:
 [
   {{
     "week": 1,
-    "title": "Week 1: Foundation & Core Concepts",
-    "description": "Establish fundamental understanding of {topic} principles and key terminology. Set up learning environment and resources.",
-    "learning_objectives": ["Understand basic concepts", "Set up practice environment", "Identify key resources"],
-    "tasks": [
-      "Read introductory materials and take notes (2 hours)",
-      "Set up necessary tools/software for practice (1 hour)",
-      "Complete beginner exercises or tutorials (2-3 hours)",
-      "Join relevant community forums or study groups (30 min)",
-      "Create a glossary of key terms (1 hour)",
-      "Take a self-assessment quiz to identify strengths/gaps (30 min)"
-    ],
-    "resources": ["Recommended books/articles", "Online tutorials", "Practice platforms"],
-    "estimated_hours": 7
+    "title": "Week 1: Introduction and Fundamentals",
+    "description": "Learn basic concepts and terminology",
+    "tasks": ["Read chapter 1", "Complete exercise 1", "Practice basic techniques"]
   }},
   {{
     "week": 2,
-    "title": "Week 2: Building Practical Skills",
-    "description": "Apply foundational knowledge through hands-on practice and build core competencies.",
-    "learning_objectives": ["Apply basic concepts practically", "Develop core skills", "Build confidence through practice"],
-    "tasks": [
-      "Complete intermediate practice exercises (3 hours)",
-      "Work on your first small project (2-3 hours)",
-      "Review and reinforce Week 1 concepts (1 hour)",
-      "Seek feedback from community or mentor (1 hour)",
-      "Document your learning progress and challenges (30 min)"
-    ],
-    "resources": ["Practice datasets/materials", "Project templates", "Community feedback"],
-    "estimated_hours": 8
+    "title": "Week 2: Building Foundation",
+    "description": "Develop core skills",
+    "tasks": ["Practice daily", "Complete project 1", "Review fundamentals"]
   }}
 ]
 
-Generate a complete learning plan covering the full duration specified. Make each week build logically on the previous one.
+Make it practical, progressive, and achievable. Include 3-5 specific tasks per week.
 """
     
     try:
@@ -228,138 +195,78 @@ async def handle_agent_request(request: Request):
         except Exception as e:
             raise HTTPException(status_code=500, detail=f"Client initialization failed: {str(e)}")
 
-        # Fetch comprehensive user context for personalization
+        # Fetch User Context for Personalization
         try:
+            # Note: Using 'users' table instead of 'profiles' based on your schema
             profile_res = supabase.from_('users').select('*').eq('id', user_id).single().execute()
-            tasks_res = supabase.from_('tasks').select('title, due_date_utc, status, priority').eq('user_id', user_id).limit(5).execute()
-            groceries_res = supabase.from_('groceries').select('item_name, quantity, bought').eq('user_id', user_id).eq('bought', False).limit(5).execute()
-            expenses_res = supabase.from_('expenses').select('category, amount, expense_date').eq('user_id', user_id).order('created_at', desc=True).limit(5).execute()
-            commitments_res = supabase.from_('commitments').select('title, type, start_time').eq('user_id', user_id).order('start_time', desc=True).limit(3).execute()
-            learning_plans_res = supabase.from_('learning_plans').select('topic, duration_months').eq('user_id', user_id).order('created_at', desc=True).limit(3).execute()
+            tasks_res = supabase.from_('tasks').select('title, due_date_utc, status').eq('user_id', user_id).limit(5).execute()
             
             profile_data = profile_res.data if profile_res.data else {}
             tasks_data = tasks_res.data if tasks_res.data else []
-            groceries_data = groceries_res.data if groceries_res.data else []
-            expenses_data = expenses_res.data if expenses_res.data else []
-            commitments_data = commitments_res.data if commitments_res.data else []
-            learning_plans_data = learning_plans_res.data if learning_plans_res.data else []
         except Exception as e:
             print(f"Failed to fetch user context: {e}")
             profile_data = {}
             tasks_data = []
-            groceries_data = []
-            expenses_data = []
-            commitments_data = []
-            learning_plans_data = []
         
         # Get current date in user's timezone
         now_ist = pendulum.now('Asia/Kolkata')
         today_in_ist = now_ist.format('dddd, MMMM D, YYYY')
 
-        # Check for grocery planning request with active goal
-        active_goal = body.get("activeGoal")
-        explicit_intent = body.get("intent")
-        
-        if explicit_intent == "generate_grocery_plan" and active_goal:
-            return await handle_generate_grocery_plan(llm, supabase, user_input, user_id, active_goal)
-        
-        # Construct the comprehensive AI prompt for all page contexts
+        # Construct the consolidated AI prompt
         system_prompt = f"""
 You are an expert AI Life Planner assistant powered by Llama 3.1 8B. Your job is to analyze the user's message and respond with a single, valid JSON object that represents their intent.
 
-Full User Context:
+Context:
 - Today's Date: {today_in_ist}
-- User Profile: {json.dumps(profile_data)}
-- Recent Tasks: {json.dumps(tasks_data)}
-- Pending Groceries: {json.dumps(groceries_data)}
-- Recent Expenses: {json.dumps(expenses_data)}
-- Upcoming Commitments: {json.dumps(commitments_data)}
-- Learning Plans: {json.dumps(learning_plans_data)}
+- User's Profile: {json.dumps(profile_data)}
+- User's Recent Tasks: {json.dumps(tasks_data)}
 
-User Message: "{user_input}"
+Based on the user's message: "{user_input}", determine the intent and structure your response into ONE of the following JSON formats:
 
-Respond with ONE of these JSON formats based on intent:
-
-1. TASKS & GOALS:
+1. For creating a task:
    {{ "intent": "create_item", "type": "task", "data": {{ 
        "title": "Task title", 
        "description": "Optional description",
-       "category": "Personal/Work/Health/Learning",
        "priority": 1-3 (1=high, 2=medium, 3=low),
        "estimate": minutes_to_complete,
-       "due_absolute_iso": "2025-08-31T17:00:00" (if time specified),
-       "tags": ["relevant", "tags"],
-       "status": "Inbox",
-       "location": "if_location_mentioned"
+       "due_absolute_iso": "2025-08-31T17:00:00" (if user specified a time),
+       "tags": ["tag1", "tag2"],
+       "status": "Inbox"
    }} }}
 
-2. GOALS:
-   {{ "intent": "create_item", "type": "goal", "data": {{ 
-       "title": "Goal title",
-       "progress_percentage": 0,
-       "deadline": "2025-12-31T23:59:59" (if specified)
-   }} }}
-
-3. COMMITMENTS & SCHEDULE:
-   {{ "intent": "create_item", "type": "commitment", "data": {{ 
-       "title": "Event/Meeting title",
-       "type": "meeting/call/appointment/event/deadline/personal/class/hackathon/gym/social/exam",
-       "start_time": "2025-08-31T14:00:00",
-       "end_time": "2025-08-31T15:00:00",
-       "location": "if_mentioned",
-       "reminder_minutes": 15
-   }} }}
-
-4. GROCERY & BUDGET:
+2. For creating a grocery item:
    {{ "intent": "create_item", "type": "grocery", "data": {{ 
        "item_name": "Grocery item name", 
-       "quantity": numeric_quantity,
-       "unit": "kg/liter/pieces",
+       "quantity": "amount/description",
        "store": "store name if mentioned",
-       "price": numeric_price_if_mentioned
+       "estimated_price": numeric_value_if_mentioned
    }} }}
 
-5. EXPENSES:
+3. For creating an expense:
    {{ "intent": "create_item", "type": "expense", "data": {{ 
-       "category": "Food/Transport/Entertainment/Shopping/Bills/Health/Education", 
+       "category": "Food/Transport/Entertainment/etc", 
        "amount": numeric_amount,
        "description": "What was purchased",
-       "expense_date": "YYYY-MM-DD"
+       "date": "YYYY-MM-DD",
+       "payment_method": "Cash/Card/UPI/etc"
    }} }}
 
-6. REMINDERS:
-   {{ "intent": "create_item", "type": "reminder", "data": {{ 
-       "title": "Reminder title",
-       "due_date": "2025-08-31T15:00:00",
-       "category": "personal/work/health"
-   }} }}
-
-7. NOTIFICATIONS:
-   {{ "intent": "create_item", "type": "notification", "data": {{ 
-       "message": "Notification message",
-       "type": "reminder/achievement/warning/info"
-   }} }}
-
-8. LEARNING PLANS:
+4. For generating a learning plan:
    {{ "intent": "generate_learning_plan", "plan_details": {{ 
        "topic": "What to learn", 
        "duration_text": "How long (e.g., '3 months', '8 weeks')",
        "duration_months": numeric_duration_in_months
    }} }}
 
-9. ANALYTICS & INSIGHTS:
-   {{ "intent": "analyze_data", "analysis_type": "budget/tasks/productivity/learning", "data": {{}} }}
-
-10. QUESTIONS & CONVERSATION:
-    {{ "intent": "answer_question", "answer": "Your helpful response here." }}
+5. For answering a question:
+   {{ "intent": "answer_question", "answer": "Your conversational answer here." }}
 
 Rules:
 - Always return valid JSON
 - Use today's date as reference for relative dates
-- For times, use ISO format in Asia/Kolkata timezone
-- Extract structured data intelligently from natural language
-- Consider user's existing data when making suggestions
-- If unclear, provide helpful conversational responses
+- For tasks with times, use ISO format in Asia/Kolkata timezone
+- Be smart about extracting structured data from natural language
+- If unclear, lean toward answering as a question rather than creating items
 """
 
         # Make AI call with error handling
@@ -433,64 +340,31 @@ async def handle_create_item(supabase: Client, parsed_response: Dict[str, Any], 
         item_data = parsed_response.get("data", {})
         item_data["user_id"] = user_id
         
-        # Determine target table and handle specific data processing
+        # Determine target table
         if item_type == "task":
             table_name = "tasks"
         elif item_type == "grocery":
             table_name = "groceries"
         elif item_type == "expense":
             table_name = "expenses"
-        elif item_type == "goal":
-            table_name = "goals"
-        elif item_type == "commitment":
-            table_name = "commitments"
-        elif item_type == "reminder":
-            table_name = "reminders"
-        elif item_type == "notification":
-            table_name = "notifications"
         else:
             raise ValueError(f"Unknown item type: {item_type}")
         
-        # Handle date/time conversions for different item types using Pendulum
+        # Handle date conversion for tasks using Pendulum
         if item_type == 'task' and item_data.get('due_absolute_iso'):
             try:
                 local_dt = pendulum.parse(item_data['due_absolute_iso'], tz='Asia/Kolkata')
                 item_data['due_date_utc'] = local_dt.in_timezone('UTC').to_iso8601_string()
                 item_data['due_date_local'] = local_dt.to_iso8601_string()
                 item_data['timezone'] = 'Asia/Kolkata'
+                # Also keep the legacy due_date for compatibility
                 item_data['due_date'] = local_dt.in_timezone('UTC').to_iso8601_string()
                 del item_data['due_absolute_iso']
             except Exception as e:
                 print(f"Date parsing error: {e}")
+                # Continue without date if parsing fails
                 if 'due_absolute_iso' in item_data:
                     del item_data['due_absolute_iso']
-        
-        elif item_type == 'commitment':
-            # Handle start_time and end_time for commitments
-            for time_field in ['start_time', 'end_time']:
-                if item_data.get(time_field):
-                    try:
-                        local_dt = pendulum.parse(item_data[time_field], tz='Asia/Kolkata')
-                        item_data[time_field] = local_dt.in_timezone('UTC').to_iso8601_string()
-                    except Exception as e:
-                        print(f"Commitment {time_field} parsing error: {e}")
-        
-        elif item_type == 'reminder' and item_data.get('due_date'):
-            try:
-                local_dt = pendulum.parse(item_data['due_date'], tz='Asia/Kolkata')
-                item_data['due_date_utc'] = local_dt.in_timezone('UTC').to_iso8601_string()
-                item_data['due_date_local'] = local_dt.to_iso8601_string()
-                item_data['timezone'] = 'Asia/Kolkata'
-                item_data['due_date'] = local_dt.in_timezone('UTC').to_iso8601_string()
-            except Exception as e:
-                print(f"Reminder date parsing error: {e}")
-        
-        elif item_type == 'goal' and item_data.get('deadline'):
-            try:
-                local_dt = pendulum.parse(item_data['deadline'], tz='Asia/Kolkata')
-                item_data['deadline'] = local_dt.in_timezone('UTC').to_iso8601_string()
-            except Exception as e:
-                print(f"Goal deadline parsing error: {e}")
 
         # Insert into database
         try:
@@ -532,18 +406,11 @@ async def handle_generate_learning_plan(llm: ChatGroq, supabase: Client, parsed_
         duration_text = plan_details.get("duration_text", "4 weeks")
         duration_months = plan_details.get("duration_months", 1)
         
-        # Generate detailed weekly milestones using more powerful model
+        # Generate detailed weekly milestones
         try:
-            # Try 70B model first for better learning plan generation
-            specialist_llm = ChatGroq(api_key=os.getenv("GROQ_API_KEY"), model="llama-3.1-70b-versatile", temperature=0.1)
-            weekly_milestones = await generate_learning_milestones(specialist_llm, topic, duration_text)
+            weekly_milestones = await generate_learning_milestones(llm, topic, duration_text)
         except Exception as e:
-            print(f"70B model failed for learning plan, trying 8B fallback: {e}")
-            # Fallback to regular 8B model if 70B isn't available
-            try:
-                weekly_milestones = await generate_learning_milestones(llm, topic, duration_text)
-            except Exception as fallback_error:
-                print(f"All milestone generation attempts failed: {fallback_error}")
+            print(f"Milestone generation failed: {e}")
             # Fallback milestones
             weekly_milestones = [
                 {
@@ -596,166 +463,6 @@ async def handle_generate_learning_plan(llm: ChatGroq, supabase: Client, parsed_
     except Exception as e:
         print(f"Generate learning plan error: {e}")
         raise HTTPException(status_code=500, detail=f"Failed to generate learning plan: {str(e)}")
-
-# --- Handle Generate Grocery Plan Logic ---
-async def handle_generate_grocery_plan(llm: ChatGroq, supabase: Client, user_input: str, user_id: str, active_goal: Dict[str, Any]) -> JSONResponse:
-    """Handle AI-powered grocery plan generation based on active goal"""
-    try:
-        # Get current date in user's timezone
-        now_ist = pendulum.now('Asia/Kolkata')
-        today_in_ist = now_ist.format('dddd, MMMM D, YYYY')
-        
-        # Fetch user's current groceries for context
-        try:
-            current_groceries_res = supabase.from_('groceries').select('item_name, quantity, unit, bought').eq('user_id', user_id).eq('bought', False).execute()
-            current_groceries = current_groceries_res.data if current_groceries_res.data else []
-        except Exception as e:
-            print(f"Failed to fetch current groceries: {e}")
-            current_groceries = []
-        
-        # Create specialist nutrition and meal planning prompt
-        specialist_prompt = f"""
-You are an expert Indian nutritionist, meal planner, and budget advisor. Today is {today_in_ist}.
-
-USER'S ACTIVE GOAL:
-- Goal Type: {active_goal.get('goal_type', 'unknown')}
-- Goal Title: {active_goal.get('title', 'Unknown Goal')}
-- Target: {active_goal.get('target_value', 'Not specified')} {active_goal.get('target_unit', '')}
-- Metadata: {json.dumps(active_goal.get('metadata', {}))}
-
-CURRENT GROCERIES (Unbought):
-{json.dumps(current_groceries)}
-
-USER REQUEST: "{user_input}"
-
-Based on the user's goal and request, generate a comprehensive, week-long grocery shopping list that is:
-1. Nutritionally aligned with their {active_goal.get('goal_type', '').replace('_', ' ')} goal
-2. Budget-conscious with realistic Indian market prices
-3. Practical for making simple, healthy Indian meals
-4. Complementary to their existing groceries (avoid duplicates)
-
-PRICING GUIDELINES:
-- Vegetables: ₹20-80 per 500g
-- Fruits: ₹40-120 per kg  
-- Grains/Pulses: ₹80-200 per kg
-- Dairy: ₹25-60 per 500ml/250g
-- Proteins: ₹150-400 per kg
-
-GOAL-SPECIFIC CONSIDERATIONS:
-{"For weight loss: Focus on low-calorie, high-fiber, high-protein foods. Include plenty of vegetables, lean proteins, and whole grains." if active_goal.get('goal_type') == 'weight_loss' else ""}
-{"For muscle gain: Emphasize high-protein foods, complex carbs, and healthy fats. Include paneer, dal, quinoa, nuts." if active_goal.get('goal_type') == 'muscle_gain' else ""}
-{"For budget eating: Focus on cost-effective staples like rice, dal, seasonal vegetables, and affordable proteins." if active_goal.get('goal_type') == 'budget_eating' else ""}
-
-Return ONLY a valid JSON object in this exact format:
-{{
-  "grocery_plan": [
-    {{ "item_name": "Paneer", "quantity": 200, "unit": "g", "estimated_price": 90 }},
-    {{ "item_name": "Spinach", "quantity": 500, "unit": "g", "estimated_price": 40 }},
-    {{ "item_name": "Toor Dal", "quantity": 1, "unit": "kg", "estimated_price": 150 }},
-    {{ "item_name": "Brown Rice", "quantity": 2, "unit": "kg", "estimated_price": 200 }}
-  ]
-}}
-
-Ensure the list contains 10-15 items for a full week of healthy meals. Include a good mix of:
-- Proteins (dal, paneer, chicken/fish if non-veg)
-- Vegetables (leafy greens, seasonal vegetables)
-- Grains (rice, wheat, quinoa)
-- Dairy (milk, yogurt)
-- Healthy fats (nuts, oils)
-- Fruits (seasonal and affordable)
-"""
-        
-        # Use more powerful model for complex grocery planning
-        try:
-            specialist_llm = ChatGroq(api_key=os.getenv("GROQ_API_KEY"), model="llama-3.1-70b-versatile", temperature=0.3)
-            response = await specialist_llm.ainvoke(specialist_prompt)
-        except Exception as e:
-            # Fallback to regular model if 70B is not available
-            print(f"70B model failed, using 8B fallback: {e}")
-            response = await llm.ainvoke(specialist_prompt)
-        
-        ai_content = response.content.strip()
-        
-        # Extract JSON from AI response
-        json_start = ai_content.find('{')
-        if json_start == -1:
-            raise ValueError("AI did not return valid JSON for grocery plan.")
-        
-        json_content = ai_content[json_start:]
-        
-        # Handle potential trailing text after JSON
-        try:
-            parsed_plan = json.loads(json_content)
-        except json.JSONDecodeError:
-            # Try to find the end of the JSON object
-            brace_count = 0
-            json_end = json_start
-            for i, char in enumerate(json_content):
-                if char == '{':
-                    brace_count += 1
-                elif char == '}':
-                    brace_count -= 1
-                    if brace_count == 0:
-                        json_end = i + 1
-                        break
-            parsed_plan = json.loads(json_content[:json_end])
-        
-        grocery_items = parsed_plan.get("grocery_plan", [])
-        
-        if not grocery_items:
-            raise ValueError("AI did not generate any grocery items.")
-        
-        # Prepare grocery items for database insertion
-        items_to_insert = []
-        for item in grocery_items:
-            grocery_data = {
-                "user_id": user_id,
-                "item_name": item.get("item_name", "Unknown Item"),
-                "quantity": item.get("quantity", 1),
-                "unit": item.get("unit", "piece"),
-                "price": item.get("estimated_price", 0),
-                "bought": False,
-                "goal_id": active_goal.get("id") if "id" in active_goal else None  # Link to active goal
-            }
-            items_to_insert.append(grocery_data)
-        
-        # Insert all grocery items at once
-        try:
-            insert_res = supabase.from_('groceries').insert(items_to_insert).execute()
-            
-            if not insert_res.data:
-                error_msg = insert_res.error.message if insert_res.error else 'Unknown database error'
-                raise Exception(f"Failed to insert grocery items: {error_msg}")
-            
-            created_items = insert_res.data
-            
-            # Trigger enrichment for all items (fire-and-forget)
-            for item in created_items:
-                asyncio.create_task(trigger_grocery_enrichment(item))
-            
-            # Generate summary message
-            total_estimated_cost = sum(item.get("estimated_price", 0) for item in grocery_items)
-            summary_message = f"Generated a personalized grocery plan for your {active_goal.get('goal_type', '').replace('_', ' ')} goal! Added {len(created_items)} items with estimated cost of ₹{total_estimated_cost:.2f}. The plan includes nutritionally balanced foods to help you achieve your target."
-            
-            return JSONResponse(
-                status_code=200,
-                content={
-                    "type": "grocery_plan_created",
-                    "message": summary_message,
-                    "items_added": len(created_items),
-                    "estimated_total_cost": total_estimated_cost,
-                    "goal_type": active_goal.get('goal_type'),
-                    "items": created_items
-                }
-            )
-            
-        except Exception as e:
-            print(f"Database insertion error for grocery plan: {e}")
-            raise HTTPException(status_code=500, detail=f"Failed to save grocery plan: {str(e)}")
-        
-    except Exception as e:
-        print(f"Grocery plan generation error: {e}")
-        raise HTTPException(status_code=500, detail=f"Failed to generate grocery plan: {str(e)}")
 
 # --- Health check endpoint ---
 @app.get("/api/health")

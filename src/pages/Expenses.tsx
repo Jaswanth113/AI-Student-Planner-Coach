@@ -1,4 +1,4 @@
-import { useState, useMemo } from 'react';
+import { useState, useMemo, useEffect } from 'react';
 import { 
   DollarSign, 
   PlusCircle, 
@@ -12,7 +12,11 @@ import {
   Trash2,
   Receipt,
   BarChart3,
-  Wallet
+  Wallet,
+  Bot,
+  Mic,
+  Plus,
+  Send
 } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
@@ -32,6 +36,8 @@ import {
   TableRow,
 } from "@/components/ui/table";
 import { Input } from '@/components/ui/input';
+import { Textarea } from '@/components/ui/textarea';
+import { useAuth } from '@/contexts/AuthContext';
 
 export default function Expenses() {
   const [isCreateModalOpen, setIsCreateModalOpen] = useState(false);
@@ -40,8 +46,14 @@ export default function Expenses() {
   const [selectedTimeRange, setSelectedTimeRange] = useState('month');
   const [searchQuery, setSearchQuery] = useState('');
   const [selectedCategory, setSelectedCategory] = useState('all');
-  const { expenses, loading, deleteExpense } = useData();
+  const { expenses, loading, deleteExpense, addExpense } = useData();
   const { toast } = useToast();
+  const { user } = useAuth();
+  
+  // AI Natural Language Expense Input
+  const [aiInputMode, setAiInputMode] = useState(false);
+  const [naturalLanguageInput, setNaturalLanguageInput] = useState('');
+  const [isProcessingAiInput, setIsProcessingAiInput] = useState(false);
 
   // Get expenses for time range
   const filteredExpenses = useMemo(() => {
@@ -340,7 +352,121 @@ export default function Expenses() {
             ))}
           </SelectContent>
         </Select>
+        
+        <Button
+          variant={aiInputMode ? "default" : "outline"}
+          size="sm"
+          onClick={() => setAiInputMode(!aiInputMode)}
+          className="gap-2"
+        >
+          <Bot className="w-4 h-4" />
+          AI Input
+        </Button>
       </div>
+
+      {/* AI Natural Language Input */}
+      {aiInputMode && (
+        <Card className="border-2 border-primary/20 bg-gradient-to-r from-blue-50 to-indigo-50">
+          <CardHeader>
+            <CardTitle className="text-lg flex items-center gap-2">
+              <Bot className="w-5 h-5 text-primary" />
+              AI Expense Assistant
+            </CardTitle>
+            <p className="text-sm text-muted-foreground">
+              Add expenses using natural language. Try: "Spent 300 on Uber today" or "Bought groceries for 1200 yesterday"
+            </p>
+          </CardHeader>
+          <CardContent>
+            <div className="flex gap-3">
+              <div className="flex-1">
+                <Textarea
+                  value={naturalLanguageInput}
+                  onChange={(e) => setNaturalLanguageInput(e.target.value)}
+                  placeholder="Describe your expense in plain English...
+                  
+Examples:
+• Spent 500 on dinner at restaurant yesterday
+• Paid 2000 for electricity bill on 15th Jan
+• Bought books for 800 using credit card"
+                  rows={3}
+                  className="resize-none"
+                />
+              </div>
+              <div className="flex flex-col gap-2">
+                <Button
+                  size="sm"
+                  variant="outline"
+                  className="p-2"
+                  disabled
+                >
+                  <Mic className="w-4 h-4" />
+                </Button>
+                <Button
+                  size="sm"
+                  onClick={async () => {
+                    if (!naturalLanguageInput.trim() || isProcessingAiInput) return;
+                    
+                    setIsProcessingAiInput(true);
+                    try {
+                      const response = await fetch('/api/agent', {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify({
+                          userInput: naturalLanguageInput,
+                          userId: user?.id,
+                          intent: 'parse_expense'
+                        })
+                      });
+                      
+                      const data = await response.json();
+                      
+                      if (data.type === 'expense_parsed' && data.expense) {
+                        await addExpense({
+                          category: data.expense.category,
+                          amount: data.expense.amount,
+                          description: data.expense.description,
+                          expense_date: data.expense.expense_date || new Date().toISOString().split('T')[0],
+                          payment_method: data.expense.payment_method || undefined,
+                          tags: data.expense.tags || []
+                        });
+                        
+                        setNaturalLanguageInput('');
+                        toast({
+                          title: 'Expense Added!',
+                          description: `₹${data.expense.amount} for ${data.expense.description}`
+                        });
+                      } else {
+                        toast({
+                          title: 'Could not parse expense',
+                          description: 'Please try rephrasing your input',
+                          variant: 'destructive'
+                        });
+                      }
+                    } catch (error) {
+                      console.error('Error processing AI input:', error);
+                      toast({
+                        title: 'Error',
+                        description: 'Failed to process expense. Please try again.',
+                        variant: 'destructive'
+                      });
+                    } finally {
+                      setIsProcessingAiInput(false);
+                    }
+                  }}
+                  disabled={!naturalLanguageInput.trim() || isProcessingAiInput}
+                  className="p-2"
+                >
+                  {isProcessingAiInput ? (
+                    <div className="animate-spin rounded-full h-4 w-4 border-b-2 border-white"></div>
+                  ) : (
+                    <Send className="w-4 h-4" />
+                  )}
+                </Button>
+              </div>
+            </div>
+          </CardContent>
+        </Card>
+      )}
 
       <Tabs defaultValue="overview" className="space-y-6">
         <TabsList className="grid w-full grid-cols-3 max-w-md">

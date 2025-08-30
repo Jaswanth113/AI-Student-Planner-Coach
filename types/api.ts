@@ -24,17 +24,19 @@ export interface HuggingFaceResponse {
 export interface Commitment {
   id: string;
   title: string;
-  description?: string;
   start_time: string;
   end_time: string;
   location?: string;
-  type?: 'meeting' | 'call' | 'appointment' | 'event' | 'deadline' | 'personal';
-  attendees?: string[];
-  link?: string;
-  calendar_id?: string;
-  recurring?: boolean;
+  type: 'class' | 'hackathon' | 'gym' | 'social' | 'exam';
+  reminder_minutes: number;
   created_at: string;
   user_id: string;
+  // Optional fields for enhanced functionality
+  description?: string;
+  attendees?: string[];
+  link?: string;
+  recurring?: boolean;
+  priority?: 'urgent' | 'high' | 'medium' | 'low';
 }
 
 export interface ApiError {

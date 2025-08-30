@@ -5,109 +5,47 @@ import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Textarea } from '@/components/ui/textarea';
 import { Badge } from '@/components/ui/badge';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
-import { useAuth } from '@/contexts/AuthContext'; // Import useAuth
-import { useAgent } from '@/hooks/useAgent'; // Import useAgent
-
-interface AgentMessage { // Re-using the AgentMessage interface from useAgent
-  role: 'user' | 'assistant';
-  content: string;
-}
+import { useAuth } from '@/contexts/AuthContext';
+import { useAgent, AgentResponse } from '@/hooks/useAgent'; // Import AgentResponse interface directly
+import { useData } from '@/contexts/DataContext';
+import { supabase } from '@/integrations/supabase/client';
 
 export default function AIAssistant() {
   const [inputMessage, setInputMessage] = useState('');
   const [isListening, setIsListening] = useState(false);
   const messagesEndRef = useRef<HTMLDivElement>(null);
-  const { user } = useAuth(); // Get user from AuthContext
-  const { sendMessageToAgent, conversationHistory: messages, loading: agentLoading } = useAgent(); // Use useAgent hook
+  const { user } = useAuth();
+  const { sendMessageToAgent, conversationHistory: messages, loading: agentLoading } = useAgent();
+  const { tasks, expenses, commitments, groceries } = useData();
+  
+  // Context-aware state
+  const [showContextPanel, setShowContextPanel] = useState(true);
+  const [userContext, setUserContext] = useState<any>(null);
 
-  // Initialize messages with a default assistant message if history is empty
-  useEffect(() => {
-    if (messages.length === 0) {
-      // This initial message will be added to the useAgent's conversationHistory
-      // when the component mounts, but only if it's truly empty.
-      // For now, we'll let useAgent manage its own history.
-      // If we want a persistent initial message, it should be handled within useAgent or passed as an initial state.
-      // For this refactor, we'll assume useAgent starts with an empty history and the first user input will populate it.
-      // The initial assistant message will be handled by the backend agent's first response or a default in the UI.
-    }
-  }, [messages]);
-
-  // Sample conversation history (will be replaced by actual history from backend/context later)
-  const conversationHistory = [
-    {
-      id: '1',
-      title: 'Task Planning for Project',
-      preview: 'Created 5 tasks for the mobile app project...',
-      timestamp: '2 hours ago',
-    },
-    {
-      id: '2',
-      title: 'Weekly Schedule Review',
-      preview: 'Analyzed your schedule and suggested optimizations...',
-      timestamp: '1 day ago',
-    },
-    {
-      id: '3',
-      title: 'Budget Analysis',
-      preview: 'Reviewed your expenses and provided insights...',
-      timestamp: '3 days ago',
-    },
-  ];
-
-  // Quick actions
-  const quickActions = [
-    { text: "Create a task for tomorrow", icon: "📝" },
-    { text: "Plan my week", icon: "📅" },
-    { text: "Analyze my budget", icon: "💰" },
-    { text: "Set a reminder", icon: "⏰" },
-    { text: "Review my goals", icon: "🎯" },
-    { text: "Optimize my schedule", icon: "⚡" },
-  ];
-
-  // Scroll to bottom when new messages are added
   useEffect(() => {
     messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
   }, [messages]);
 
-  // Handle sending messages
   const handleSendMessage = async () => {
     if (!inputMessage.trim() || agentLoading) return;
 
-    setInputMessage(''); // Clear input immediately
+    const currentInput = inputMessage.trim();
+    setInputMessage('');
     
     if (!user?.id) {
-      // The useAgent hook already handles this, but adding a local toast for immediate feedback
-      // if the user object is null before even calling sendMessageToAgent.
-      // The useAgent hook will also add an error message to its history.
       return;
     }
 
     try {
-      const result = await sendMessageToAgent(inputMessage.trim());
-
-      if (result.error) {
-        // Error handling is done within useAgent, which also updates its history.
-        // No need to set local messages here.
-        return;
-      }
-
-      // The useAgent hook already adds the assistant's response to its history.
-      // No need to set local messages here.
+      await sendMessageToAgent(currentInput);
     } catch (error: any) {
       console.error('Error sending message:', error);
-      // Error handling is done within useAgent, which also updates its history.
-      // No need to set local messages here.
     }
   };
 
-  // Removed generateAIResponse as it's now handled by the backend API
-  // const generateAIResponse = (input: string): string => { ... };
-
-  // Handle voice input (placeholder)
   const toggleVoiceInput = () => {
     if (!isListening) {
       setIsListening(true);
-      // Start voice recognition here
       setTimeout(() => {
         setIsListening(false);
         setInputMessage("Create a task to review the quarterly report by Friday");
@@ -117,22 +55,69 @@ export default function AIAssistant() {
     }
   };
 
-  // Handle quick action
+  const quickActions = [
+    { text: "Create a task for tomorrow", icon: "📝" },
+    { text: "Plan my week", icon: "📅" },
+    { text: "Analyze my budget", icon: "💰" },
+    { text: "Set a reminder", icon: "⏰" },
+    { text: "Review my goals", icon: "🎯" },
+    { text: "Optimize my schedule", icon: "⚡" },
+  ];
+
   const handleQuickAction = (actionText: string) => {
     setInputMessage(actionText);
   };
 
-  const formatTimestamp = (timestamp: string) => {
-    return new Date(timestamp).toLocaleTimeString('en-US', {
-      hour: 'numeric',
-      minute: '2-digit',
-      hour12: true
-    });
+  // Helper to render agent response content based on its type
+  const renderAgentResponseContent = (message: { role: 'user' | 'assistant'; content: string; data?: AgentResponse }) => {
+    if (message.role === 'user') {
+      return <div className="text-sm whitespace-pre-wrap">{message.content}</div>;
+    }
+
+    const data = message.data; // Assuming the full AgentResponse is stored in message.data
+    if (!data) {
+      return <div className="text-sm whitespace-pre-wrap">{message.content}</div>;
+    }
+
+    switch (data.type) {
+      case 'creation_success':
+        return (
+          <div className="text-sm">
+            <p className="font-semibold">Success: {data.message || 'Item created!'}</p>
+            {data.item && (
+              <ul className="list-disc list-inside mt-1">
+                <li>Type: {data.item.type || 'N/A'}</li>
+                <li>Title: {data.item.title || data.item.item_name || 'N/A'}</li>
+                {data.item.due_date_local && <li>Due: {new Date(data.item.due_date_local).toLocaleDateString()}</li>}
+              </ul>
+            )}
+          </div>
+        );
+      case 'answer':
+        return <div className="text-sm whitespace-pre-wrap">{data.text || 'AI provided an answer.'}</div>;
+      case 'plan_created':
+        return (
+          <div className="text-sm">
+            <p className="font-semibold">Learning Plan Created: {data.plan?.topic || 'N/A'}</p>
+            {data.plan?.weekly_milestones && (
+              <ul className="list-disc list-inside mt-1">
+                {data.plan.weekly_milestones.map((milestone, i) => (
+                  <li key={i}>{milestone}</li>
+                ))}
+              </ul>
+            )}
+          </div>
+        );
+      case 'error':
+        return <div className="text-sm text-red-500 whitespace-pre-wrap">Error: {data.detail || data.message || data.error || 'An unknown error occurred.'}</div>;
+      default:
+        return <div className="text-sm whitespace-pre-wrap">{message.content}</div>;
+    }
   };
 
   return (
-    <div className="max-w-6xl mx-auto px-4 py-6 h-[calc(100vh-8rem)]">
-      <div className="h-full flex flex-col space-y-6">
+    <div className="max-w-6xl mx-auto px-4 py-6">
+      <div className="flex flex-col space-y-6 min-h-[calc(100vh-8rem)]">
         {/* Header */}
         <header className="flex items-center justify-between">
           <div className="space-y-2">
@@ -152,20 +137,20 @@ export default function AIAssistant() {
           </div>
         </header>
 
-        <div className="flex-1 grid grid-cols-1 lg:grid-cols-4 gap-6">
+        <div className="grid grid-cols-1 lg:grid-cols-4 gap-6">
           {/* Chat Interface */}
-          <div className="lg:col-span-3 flex flex-col">
-            <Card className="flex-1 flex flex-col">
-              <CardHeader className="pb-3">
+          <div className="lg:col-span-3">
+            <Card className="h-[600px] flex flex-col">
+              <CardHeader className="pb-3 flex-shrink-0">
                 <CardTitle className="text-lg">Chat</CardTitle>
               </CardHeader>
               
               {/* Messages */}
-              <CardContent className="flex-1 flex flex-col px-0">
-                <div className="flex-1 overflow-y-auto px-6 space-y-4">
+              <CardContent className="flex-1 flex flex-col px-0 overflow-hidden">
+                <div className="flex-1 overflow-y-auto px-6 space-y-4 min-h-0">
                   {messages.map((message, index) => (
                     <div
-                      key={index} // Using index as key since messages are managed by useAgent and don't have explicit IDs here
+                      key={index}
                       className={`flex gap-3 ${
                         message.role === 'assistant' ? 'justify-start' : 'justify-end'
                       }`}
@@ -185,8 +170,7 @@ export default function AIAssistant() {
                             : 'bg-primary text-primary-foreground ml-auto'
                         }`}
                       >
-                        <div className="text-sm whitespace-pre-wrap">{message.content}</div>
-                        {/* Timestamp removed as useAgent's messages don't have it directly */}
+                        {renderAgentResponseContent(message)}
                       </div>
                       
                       {message.role === 'user' && (
@@ -311,10 +295,9 @@ export default function AIAssistant() {
                           className="p-3 rounded-lg border border-border cursor-pointer hover:bg-muted/50 transition-colors"
                         >
                           <h4 className="font-medium text-sm mb-1">{message.role === 'user' ? 'You:' : 'AI:'}</h4>
-                          <p className="text-xs text-muted-foreground mb-2 line-clamp-2">
-                            {message.content}
-                          </p>
-                          {/* <p className="text-xs text-muted-foreground">{formatTimestamp(message.timestamp)}</p> */}
+                          <div className="text-xs text-muted-foreground mb-2 line-clamp-2">
+                            {renderAgentResponseContent(message)}
+                          </div>
                         </div>
                       ))
                     ) : (
@@ -324,6 +307,62 @@ export default function AIAssistant() {
                 </Card>
               </TabsContent>
             </Tabs>
+
+            {/* User Context Panel */}
+            <Card>
+              <CardHeader>
+                <CardTitle className="text-base flex items-center gap-2">
+                  <User className="w-4 h-4" />
+                  Your Context
+                </CardTitle>
+              </CardHeader>
+              <CardContent className="space-y-3 text-xs">
+                <div className="space-y-2">
+                  <div className="flex justify-between">
+                    <span className="text-muted-foreground">Active Tasks:</span>
+                    <span className="font-medium">{tasks.filter(t => t.status !== 'Done').length}</span>
+                  </div>
+                  <div className="flex justify-between">
+                    <span className="text-muted-foreground">Due Today:</span>
+                    <span className="font-medium text-orange-600">
+                      {tasks.filter(t => {
+                        const today = new Date().toISOString().split('T')[0];
+                        const taskDate = t.due_date_local || t.due_date;
+                        return taskDate && taskDate.split('T')[0] === today && t.status !== 'Done';
+                      }).length}
+                    </span>
+                  </div>
+                  <div className="flex justify-between">
+                    <span className="text-muted-foreground">Overdue:</span>
+                    <span className="font-medium text-red-600">
+                      {tasks.filter(t => {
+                        const today = new Date().toISOString().split('T')[0];
+                        const taskDate = t.due_date_local || t.due_date;
+                        return taskDate && taskDate.split('T')[0] < today && t.status !== 'Done';
+                      }).length}
+                    </span>
+                  </div>
+                </div>
+                
+                <div className="border-t pt-2 space-y-2">
+                  <div className="flex justify-between">
+                    <span className="text-muted-foreground">This Month Expenses:</span>
+                    <span className="font-medium">₹{expenses.filter(e => {
+                      const thisMonth = new Date().toISOString().slice(0, 7);
+                      return e.expense_date.slice(0, 7) === thisMonth;
+                    }).reduce((sum, e) => sum + e.amount, 0).toLocaleString()}</span>
+                  </div>
+                  <div className="flex justify-between">
+                    <span className="text-muted-foreground">Grocery Items:</span>
+                    <span className="font-medium">{groceries.length}</span>
+                  </div>
+                  <div className="flex justify-between">
+                    <span className="text-muted-foreground">Upcoming Events:</span>
+                    <span className="font-medium">{commitments.filter(c => new Date(c.start_time) > new Date()).length}</span>
+                  </div>
+                </div>
+              </CardContent>
+            </Card>
 
             {/* AI Features */}
             <Card>
@@ -349,6 +388,14 @@ export default function AIAssistant() {
                 <div className="flex items-center gap-2">
                   <div className="w-2 h-2 bg-green-500 rounded-full"></div>
                   <span>Budget Analysis</span>
+                </div>
+                <div className="flex items-center gap-2">
+                  <div className="w-2 h-2 bg-green-500 rounded-full"></div>
+                  <span>Grocery Planning</span>
+                </div>
+                <div className="flex items-center gap-2">
+                  <div className="w-2 h-2 bg-green-500 rounded-full"></div>
+                  <span>Expense Tracking</span>
                 </div>
                 <div className="flex items-center gap-2">
                   <div className="w-2 h-2 bg-yellow-500 rounded-full"></div>

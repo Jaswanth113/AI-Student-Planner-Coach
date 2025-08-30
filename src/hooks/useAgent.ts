@@ -5,17 +5,17 @@ import { useToast } from './use-toast'; // Assuming use-toast is in the same hoo
 interface AgentMessage {
   role: 'user' | 'assistant';
   content: string;
+  data?: AgentResponse; // Store the full agent response here
 }
 
-interface AgentResponse {
-  message?: string;
-  item?: any; // For create intent
-  plan?: { weekly_milestones: string[] }; // For generate_goal_plan intent
-  text?: string; // For answer_question intent
-  type?: string; // Add type for agent response
-  error?: string;
-  // New fields for asynchronous response
-  status?: number; // To indicate HTTP status like 202
+export interface AgentResponse {
+  type?: 'creation_success' | 'answer' | 'plan_created' | 'error';
+  message?: string; // Generic message for toasts/feedback
+  item?: any; // For 'creation_success' intent
+  plan?: { weekly_milestones: string[]; topic: string; duration_text: string }; // For 'plan_created' intent
+  text?: string; // For 'answer' intent
+  error?: string; // For general errors
+  detail?: string; // For FastAPI error details
 }
 
 export function useAgent() {
@@ -57,25 +57,36 @@ export function useAgent() {
       if (response.ok) {
         try {
           const data: AgentResponse = JSON.parse(responseText);
-          const agentResponseContent = data.message || data.text || (data.plan ? `Generated plan for: ${userInput}` : 'Agent responded.');
-          const agentMessage: AgentMessage = { role: 'assistant', content: agentResponseContent };
+          let agentResponseContent: string;
+
+          if (data.type === 'creation_success') {
+            agentResponseContent = data.message || `Successfully created ${data.item?.title || data.item?.item_name || 'item'}.`;
+          } else if (data.type === 'answer') {
+            agentResponseContent = data.text || 'Agent provided an answer.';
+          } else if (data.type === 'plan_created') {
+            agentResponseContent = data.message || `Generated a learning plan for ${data.plan?.topic || 'your request'}.`;
+          } else {
+            agentResponseContent = data.message || 'Agent responded.';
+          }
+          
+          const agentMessage: AgentMessage = { role: 'assistant', content: agentResponseContent, data: data };
           setConversationHistory((prev) => [...prev, agentMessage]);
           return data;
         } catch (jsonParseError) {
-          // If response.ok but not valid JSON, treat as a generic success with text content
-          const agentMessage: AgentMessage = { role: 'assistant', content: responseText };
+          console.error('JSON Parse Error (OK response):', jsonParseError);
+          const errorResponse: AgentResponse = { type: 'error', message: responseText || 'Unparseable response from agent.' };
+          const agentMessage: AgentMessage = { role: 'assistant', content: responseText || 'Agent responded with unparseable content.', data: errorResponse };
           setConversationHistory((prev) => [...prev, agentMessage]);
-          return { message: responseText };
+          return errorResponse;
         }
       } else {
-        let errorMessage = 'Failed to get response from agent.';
+        let errorMessage = `Server responded with status ${response.status}.`;
         try {
-          // Attempt to parse as JSON, if it's a structured error
-          const errorData: AgentResponse = JSON.parse(responseText);
-          errorMessage = errorData.error || errorData.message || errorMessage;
+          const errorData: { detail?: string; error?: string; message?: string } = JSON.parse(responseText);
+          errorMessage = errorData.detail || errorData.error || errorData.message || errorMessage;
         } catch (jsonParseError) {
-          // If not JSON, use the raw text as the error message
-          errorMessage = responseText || `Server responded with status ${response.status}`;
+          console.error('JSON Parse Error (Error response):', jsonParseError);
+          errorMessage = responseText || errorMessage;
         }
         
         toast({
@@ -83,9 +94,10 @@ export function useAgent() {
           description: errorMessage,
           variant: 'destructive',
         });
-        const agentMessage: AgentMessage = { role: 'assistant', content: `Error: ${errorMessage}` };
+        const errorResponse: AgentResponse = { type: 'error', error: errorMessage, detail: errorMessage };
+        const agentMessage: AgentMessage = { role: 'assistant', content: `Error: ${errorMessage}`, data: errorResponse };
         setConversationHistory((prev) => [...prev, agentMessage]);
-        return { error: errorMessage };
+        return errorResponse;
       }
     } catch (error: any) {
       console.error('Error communicating with agent:', error);
@@ -94,9 +106,10 @@ export function useAgent() {
         description: 'Could not connect to the AI agent.',
         variant: 'destructive',
       });
-      const agentMessage: AgentMessage = { role: 'assistant', content: `Network error: ${error.message}` };
+      const errorResponse: AgentResponse = { type: 'error', error: error.message };
+      const agentMessage: AgentMessage = { role: 'assistant', content: `Network error: ${error.message}`, data: errorResponse };
       setConversationHistory((prev) => [...prev, agentMessage]);
-      return { error: error.message };
+      return errorResponse;
     } finally {
       setLoading(false);
     }

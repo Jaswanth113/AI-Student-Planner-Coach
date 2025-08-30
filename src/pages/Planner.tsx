@@ -144,7 +144,7 @@ export default function Planner() {
                   Daily Schedule
                 </CardTitle>
               </CardHeader>
-              <CardContent className="space-y-1 max-h-[600px] overflow-y-auto">
+              <CardContent className="space-y-1 h-[500px] overflow-y-auto">
                 {timeSlots.map(({ time, displayTime, hour }) => {
                   const { commitments: hourCommitments, tasks: hourTasks } = getEventsForHour(currentDate, hour);
 
@@ -511,7 +511,7 @@ export default function Planner() {
   }
 
   return (
-    <div className="max-w-7xl mx-auto px-4 py-6 space-y-6">
+    <div className="max-w-7xl mx-auto px-4 py-6 space-y-6 min-h-screen">
       {/* Page Header */}
       <header className="space-y-2">
         <h1 className="text-3xl font-bold tracking-tight text-foreground">Planner</h1>

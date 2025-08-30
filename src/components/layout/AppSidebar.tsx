@@ -20,15 +20,7 @@ import { Button } from "@/components/ui/button";
 
 const navigationItems = [
   { name: "Home", href: "/", icon: Home },
-  { 
-    name: "Planner", 
-    href: "/planner", 
-    icon: Calendar,
-    subItems: [
-      { name: "Week View", href: "/planner/week" },
-      { name: "Day View", href: "/planner/day" }
-    ]
-  },
+  { name: "Planner", href: "/planner", icon: Calendar },
   { name: "Tasks & Goals", href: "/tasks", icon: CheckSquare },
   { name: "Commitments", href: "/commitments", icon: Clock },
   { name: "Grocery & Budget", href: "/grocery", icon: ShoppingCart },
