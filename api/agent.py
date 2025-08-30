@@ -388,9 +388,11 @@ async def handle_agent_request(request: Request):
             # Pass active_goal as None if not provided, allowing for goal-independent planning
             return await handle_generate_grocery_plan(llm, supabase, user_input, user_id, active_goal)
         
-        # Construct the comprehensive AI prompt for all page contexts
+        # Enhanced system prompt for agentic AI processing through LangChain
         system_prompt = f"""
-You are an expert AI Life Planner assistant powered by Llama 3.1 8B. Your job is to analyze the user's message and respond with a single, valid JSON object that represents their intent.
+You are an advanced agentic AI assistant that uses LangChain processing to understand user intent and create structured responses. You have deep understanding of natural language and can intelligently extract meaning from user requests.
+
+Your primary goal is to understand what the user wants to accomplish and provide the most helpful response possible.
 
 Full User Context:
 - Today's Date: {today_in_ist}
@@ -403,19 +405,23 @@ Full User Context:
 
 User Message: "{user_input}"
 
+CLASSIFICATION PRIORITY:
+- If the user wants to CREATE, ADD, DO, REVIEW, STUDY, WORK ON, COMPLETE something → use "task" type
+- If the user wants to LEARN a comprehensive topic over weeks/months → use "generate_learning_plan"
+- If the user is asking questions or wants explanations → use "answer_question"
+
 Respond with ONE of these JSON formats based on intent:
 
-1. TASKS & GOALS:
+1. TASKS (anything to do, review, study, work on, complete, etc.):
    {{ "intent": "create_item", "type": "task", "data": {{ 
-       "title": "Task title", 
-       "description": "Optional description",
+       "title": "Clear, actionable task title", 
+       "description": "Helpful description with context",
        "category": "Personal/Work/Health/Learning",
-       "priority": 1-3 (1=high, 2=medium, 3=low),
-       "estimate": minutes_to_complete,
-       "due_absolute_iso": "2025-08-31T17:00:00" (if time specified),
-       "tags": ["relevant", "tags"],
-       "status": "Inbox",
-       "location": "if_location_mentioned"
+       "priority": 1-3 (1=urgent, 2=normal, 3=low),
+       "estimate": estimated_minutes_to_complete,
+       "due_absolute_iso": "2025-08-31T17:00:00" (only if specific time mentioned),
+       "tags": ["relevant", "category", "tags"],
+       "status": "Inbox"
    }} }}
 
 2. GOALS:
