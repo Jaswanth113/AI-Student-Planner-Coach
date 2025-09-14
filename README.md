@@ -9,14 +9,12 @@ It transforms natural language commands into actionable plans while providing pe
 - [Overview](#overview)  
 - [Core Features](#core-features)  
 - [System Architecture](#system-architecture)  
-- [Installation](#installation)  
 - [Usage](#usage)  
-- [Results](#results)  
 
 ---
 
 ## Overview
-Instead of using multiple apps for tasks, groceries, expenses, and learning, this project provides a **single AI-powered hub**.  
+Instead of juggling multiple apps for tasks, groceries, expenses, and learning, this project provides a **single AI-powered hub**.  
 
 With one command (e.g., *“Plan my study schedule for 2 months and prepare a ₹2000 grocery list”*), the system:  
 - Generates actionable tasks & calendar events  
@@ -28,19 +26,28 @@ With one command (e.g., *“Plan my study schedule for 2 months and prepare a �
 ---
 
 ## Core Features
-- **Dashboard** → At-a-glance summary with agenda, deadlines, goal progress, budget, and notifications.  
+- **Dashboard** → High-level summary with agenda, deadlines, goal progress, budget, and AI nudges.  
 - **Planner** → Unified calendar with drag-and-drop rescheduling for tasks, commitments, and reminders.  
-- **Tasks & Goals** → Full task manager with overdue tracking, goal cards, and linked subtasks.  
-- **Learning Mentor** → Auto-generates week-by-week learning plans (e.g., *“Learn Design in 2 months”*) and syncs tasks.  
-- **Grocery & Budgeting** → Goal-oriented grocery lists, nutrition tracking, real-time cost estimation, and diet planning.  
-- **Expenses** → AI-based expense categorization, spending summaries, and budget insights.  
-- **AI Assistant** → Conversational hub to query your data (*“What’s on my schedule tomorrow?”*), suggest time optimizations, or proactively add commitments.  
-- **Responsive UI** → Clean, mobile-friendly design with intuitive navigation and quick actions.  
+- **Tasks & Goals** → Task manager with overdue tracking, progress bars, and linked subtasks.  
+- **Learning Mentor** → Auto-generates week-by-week study plans (e.g., *“Learn Design in 2 months”*) and syncs tasks.  
+- **Grocery & Budgeting** → Goal-oriented grocery lists, real-time cost & nutrition tracking, and diet-aware planning.  
+- **Expenses** → AI-based expense categorization and conversational spending summaries.  
+- **AI Assistant** → Chat-based hub to query schedules, optimize time, and proactively suggest commitments.  
+- **Responsive UI** → Mobile-friendly, interactive design with sidebar navigation and quick-add actions.  
 
 ---
 
 ## System Architecture
-- **Frontend (40%)** → React + TypeScript, responsive UI with Tailwind CSS  
-- **Backend (40%)** → Python, FastAPI, multi-agent orchestration with LangChain  
-- **AI & APIs (10%)** → Groq LLMs (Llama 3, Mixtral), CalorieNinja API  
-- **Database & Auth (10%)** → Supabase (Postgres, RLS, Auth, Realtime)  
+- **Frontend (40%)** → Responsive UI with interactive components  
+- **Backend (40%)** → Orchestrates AI workflows and data management  
+- **AI & APIs (10%)** → Multi-agent reasoning using Groq LLMs & LangChain  
+- **Database & Auth (10%)** → Supabase (PostgreSQL, RLS, Auth, Realtime)  
+
+---
+
+## Usage
+- Add tasks, deadlines, or goals using **plain language commands**.  
+- Generate **study/fitness/learning roadmaps** with automatic task integration.  
+- Plan **groceries & meals** aligned with budget and nutrition targets.  
+- Track **expenses** with AI-categorized insights.  
+- Chat with the **AI Assistant** for personalized recommendations.  
